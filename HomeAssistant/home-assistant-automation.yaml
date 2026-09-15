@@ -1,0 +1,206 @@
+alias: Zotac RI531 - Daily backup at cheapest time
+description: >
+  Wake Zotac if needed, wait until it is online, then start the first backup.
+  Process MQTT success and failure reports to continue the backup sequence.
+triggers:
+  - trigger: time
+    at: sensor.daily_backup_cheapest_start
+    id: cheapest_start
+  - trigger: mqtt
+    id: rpi5_backup_status
+    options:
+      topic: homeassistant/Syncerate/Zotac-RI531-RPI5-Storage/status
+  - trigger: mqtt
+    id: asus_backup_status
+    options:
+      topic: homeassistant/Syncerate/Zotac-RI531-AsusN14E/status
+conditions: []
+actions:
+  - alias: Scheduled start - wake Zotac and start the first backup
+    choose:
+      - conditions:
+          - condition: trigger
+            id: cheapest_start
+        sequence:
+          - alias: Wake and wait only when Zotac is not ready
+            if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: binary_sensor.zotac_ri531_lubuntu_lts_lan
+                    state: 'on'
+            then:
+              - alias: Wake Zotac
+                action: switch.turn_on
+                target:
+                  entity_id: switch.zotac_ri531_lubuntults
+                data: {}
+              - alias: Check readiness every ten seconds for up to ten minutes
+                repeat:
+                  count: 60
+                  sequence:
+                    - alias: Wait ten seconds only while Zotac is not ready
+                      if:
+                        - condition: not
+                          conditions:
+                            - condition: state
+                              entity_id: binary_sensor.zotac_ri531_lubuntu_lts_lan
+                              state: 'on'
+                      then:
+                        - delay: '00:00:10'
+          - alias: Start the first backup if ready; otherwise report a timeout
+            if:
+              - condition: state
+                entity_id: binary_sensor.zotac_ri531_lubuntu_lts_lan
+                state: 'on'
+            then:
+              - alias: Start Asus-to-RPI5 backup
+                action: mqtt.publish
+                data:
+                  topic: homeassistant/mqtt-listener/zotac-ri531
+                  payload: start_rpi5_daily
+                  qos: 0
+                  retain: false
+            else:
+              - alias: Notify that Zotac did not become ready
+                action: notify.pushover
+                continue_on_error: true
+                data:
+                  title: ❌ Zotac backup could not start
+                  message: >
+                    Zotac did not become ready within approximately ten minutes.
+                    No backup command was sent.
+                  data:
+                    priority: 1
+                    sound: siren
+          - alias: Finish this scheduled invocation; MQTT replies trigger later runs
+            stop: Scheduled startup handling finished
+  - condition: trigger
+    id:
+      - rpi5_backup_status
+      - asus_backup_status
+  - alias: Read the MQTT report
+    variables:
+      report: |
+        {{ trigger.payload_json
+           if trigger.payload_json is defined and trigger.payload_json is mapping
+           else {} }}
+  - variables:
+      mqtt_status: |
+        {{ report.status | default('unknown') | string | trim | lower }}
+      report_title: >
+        {{ report.title | default(report.name | default(report.job |
+        default('Syncerate'))) }}
+  - alias: Handle success or failure
+    choose:
+      - conditions:
+          - condition: template
+            value_template: '{{ mqtt_status == ''success'' }}'
+        sequence:
+          - action: notify.pushover
+            continue_on_error: true
+            data:
+              title: ✅ Syncerate ran successfully
+              message: >-
+                {{ report_title }} finished successfully.
+
+                Exit code: {{ report.exit_code | default('unknown') }} {% if
+                report.warning | default(false) | bool(false) %} Warning:
+                Syncerate completed with one or more non-fatal warnings. {%
+                endif %}
+              data:
+                priority: 0
+                sound: pushover
+          - alias: Continue according to which backup finished
+            choose:
+              - conditions:
+                  - condition: trigger
+                    id: rpi5_backup_status
+                sequence:
+                  - alias: Start RPI5-to-Asus backup
+                    action: mqtt.publish
+                    data:
+                      topic: homeassistant/mqtt-listener/zotac-ri531
+                      payload: start_asusn14e_daily
+                      qos: 0
+                      retain: false
+              - conditions:
+                  - condition: trigger
+                    id: asus_backup_status
+                sequence:
+                  - action: mqtt.publish
+                    metadata: {}
+                    data:
+                      evaluate_payload: false
+                      qos: '0'
+                      retain: false
+                      topic: homeassistant/mqtt-listener/zotac-ri531
+                      payload: start_cleanupinsyncoidsnapshots
+                  - delay:
+                      hours: 0
+                      minutes: 1
+                      seconds: 0
+                      milliseconds: 0
+                  - action: mqtt.publish
+                    metadata: {}
+                    data:
+                      evaluate_payload: false
+                      qos: '0'
+                      retain: false
+                      topic: homeassistant/mqtt-listener/zotac-ri531
+                      payload: start_snapbeforewatchtower
+                  - delay:
+                      hours: 0
+                      minutes: 1
+                      seconds: 0
+                      milliseconds: 0
+                  - action: mqtt.publish
+                    metadata: {}
+                    data:
+                      evaluate_payload: false
+                      qos: '0'
+                      retain: false
+                      topic: homeassistant/mqtt-listener/zotac-ri531
+                      payload: shutdown_delay
+                  - action: notify.pushover
+                    data:
+                      title: Daily backup done (Asus N14E and RPI5)
+                      message: >
+                        The final RPI5-to-Asus backup reported success. The Asus
+                        N14E and RPI5 backup sequence is complete.
+                      data:
+                        priority: 0
+                        sound: pushover
+      - conditions:
+          - condition: template
+            value_template: '{{ mqtt_status == ''failure'' }}'
+        sequence:
+          - action: notify.pushover
+            data:
+              title: ❌ Syncerate sync failed
+              message: >-
+                {{ report_title }} failed.
+
+                Exit code: {{ report.exit_code | default('unknown') }}
+
+                Error: {{ report.error | default('No error message') }}
+
+                Last stderr/output: {{ report.stderr | default('No stderr
+                captured') }}
+              data:
+                priority: 1
+                sound: siren
+    default:
+      - action: notify.pushover
+        data:
+          title: ❔ Syncerate status unknown
+          message: |-
+            Received an MQTT status that was neither success nor failure.
+            Title: {{ report_title }}
+            Topic: {{ trigger.topic }}
+            Raw payload: {{ trigger.payload | default('No payload') }}
+          data:
+            priority: 0
+            sound: pushover
+mode: queued
+max: 10
