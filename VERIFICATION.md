@@ -1,14 +1,15 @@
-# Verification — 0.0.14
+# Verification — 0.0.15
 
 Verification was performed on the release source tree without contacting a real MQTT broker, SMTP server, Docker daemon, Home Assistant instance, or issuing a real host power command.
 
 ## Completed checks
 
 - `python3 -m unittest discover -s tests -v`
-  - Result: **45 tests passed**.
+  - Result: **47 tests passed**.
   - Docker, MQTT, mail, and power operations are mocked where external I/O would otherwise occur.
   - New optional-channel regressions cover MQTT-only, mail-only, both channels disabled, both optional sections omitted, missing Paho while MQTT is disabled, disabled-feature settings being ignored, and Watchtower success/failure behavior when no external output channel is enabled.
-  - New current-run regressions verify `--since` log scoping, captured Compose exit-code use, and fail-closed behavior when the timestamp marker is unavailable.
+  - Current-run regressions verify `--since` log scoping, captured Compose exit-code use, and fail-closed behavior when the timestamp marker is unavailable.
+  - New production-format regressions verify Watchtower 1.7.1 default Auto/LogFmt `Session done` output is parsed successfully and that LogFmt summaries with failed updates still fail strictly.
   - Existing regressions still cover report JSON validation, MQTT/mail/power failure gates, sendmail and SMTP backends, systemd command wiring, completed-Watchtower inspection, shared-topic Home Assistant host filtering, `mode: restart`, and shutdown-only-after-success behavior.
 - `python3 -m py_compile mqtt_power_action_none.py tests/test_mqtt_reports.py tests/test_watchtower_flow.py`
   - Result: **passed**.
@@ -45,7 +46,7 @@ Verification was performed on the release source tree without contacting a real 
 
 ## What was not fully tested
 
-- No real Watchtower container was run, so behavior against the target Docker/Compose/Watchtower installation still needs a host test.
+- No real Watchtower container was run in this build environment. The new parser is tested against the production LogFmt shape supplied from Watchtower 1.7.1, but the target host should still run the service once after installation.
 - No real current-run `docker compose logs --since ...` or runtime-marker flow was exercised against the target Docker daemon; command construction and fail-closed behavior are covered offline.
 - No real MQTT broker, sendmail/Postfix installation, or SMTP provider was contacted.
 - No Home Assistant automation was imported/executed in a live Home Assistant instance. YAML and relevant Jinja/control-flow branches are checked offline.

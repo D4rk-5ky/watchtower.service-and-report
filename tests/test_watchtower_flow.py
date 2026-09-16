@@ -61,6 +61,27 @@ class WatchtowerReportTests(unittest.TestCase):
         self.assertNotIn('user:pass', json.dumps(report))
         self.assertIn('[redacted]', json.dumps(report))
 
+    def test_default_logfmt_session_is_accepted(self):
+        output = (
+            'time="2026-09-16T11:36:51+02:00" level=info msg="Watchtower 1.7.1" notify=no\n'
+            'time="2026-09-16T11:36:53+02:00" level=info msg="Session done" Failed=0 Scanned=2 Updated=0 notify=no'
+        )
+        report = self.app.inspect_watchtower_output(output, 0, self.cfg)
+        self.assertEqual(report['status'], 'success')
+        self.assertEqual(report['scanned'], 2)
+        self.assertEqual(report['updated'], 0)
+        self.assertEqual(report['failed'], 0)
+
+    def test_default_logfmt_failed_session_still_fails(self):
+        output = (
+            'time="2026-09-16T11:36:53+02:00" level=info '
+            'msg="Session done" Failed=1 Scanned=2 Updated=0 notify=no'
+        )
+        report = self.app.inspect_watchtower_output(output, 0, self.cfg)
+        self.assertEqual(report['status'], 'failure')
+        self.assertEqual(report['failed'], 1)
+        self.assertIn('1 failed container update', report['error'])
+
     def test_parse_compose_exit_code_shapes(self):
         one = json.dumps({'Service': 'watchtower', 'ExitCode': 0, 'State': 'exited'})
         self.assertEqual(self.app.parse_compose_exit_code(one, 'watchtower'), 0)

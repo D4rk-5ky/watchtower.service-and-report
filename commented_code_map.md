@@ -1,6 +1,6 @@
 # Commented Code Map
 
-This file maps the current 0.0.14 code and operational commands. It describes what each function/command does and why it exists.
+This file maps the current 0.0.15 code and operational commands. It describes what each function/command does and why it exists.
 
 ## Project files
 
@@ -8,7 +8,7 @@ This file maps the current 0.0.14 code and operational commands. It describes wh
 | --- | --- |
 | `mqtt_power_action_none.py` | Main optional-MQTT/optional-mail/power reporter plus completed-Watchtower result inspection. |
 | `systemd/watchtower.service` | Keeps Watchtower lifecycle in systemd: pull, run/wait, post-run reporting, teardown. |
-| `compose.example.yaml` | Redacted one-shot Watchtower Compose example with JSON/info logging required by the post-run parser. |
+| `compose.example.yaml` | Redacted one-shot Watchtower Compose example with recommended JSON/info logging; the parser also accepts default Auto/LogFmt output. |
 | `configs/config-sendmail-none.example.ini` | Complete 43-option example using local sendmail and no local power action. |
 | `configs/config-smtp.example.ini` | Complete 43-option example using SMTP and no local power action. |
 | `HomeAssistant/watchtower-manual-update.yaml` | Redacted one-host workflow that waits on one shared result-topic trigger, filters by JSON `host`, reads JSON `status`, and shuts down only after success. |
@@ -51,7 +51,8 @@ This file maps the current 0.0.14 code and operational commands. It describes wh
 | `send_mail(config, mail_type, details)` | Returns a successful no-op when mail is disabled; otherwise builds a message and routes it to sendmail or SMTP. | Makes mail independently optional while keeping backend selection out of main flow. |
 | `run_power_action(config)` | Performs/dry-runs `systemctl poweroff` or `systemctl reboot`, or no-ops for `none`. | Centralizes the dangerous local power action behind configuration safety checks. |
 | `redact_watchtower_text(text, config)` | Removes configured secrets, URL credentials, and common password assignments from forwarded diagnostics. | Reduces accidental credential disclosure in MQTT/email result fields. |
-| `inspect_watchtower_output(output, returncode, config)` | Parses Watchtower JSON logs, validates one `Session done` record/counters, detects failed updates/errors, and builds a bounded result object. | Converts completed Watchtower output into a reliable `success`/`failure` contract instead of trusting exit code alone. |
+| `parse_watchtower_log_record(line)` | Parses one Watchtower line as JSON first, then as the default LogFmt/Auto syntax; numeric session counters are normalized to integers. | Lets production Watchtower 1.7.1 defaults and explicit JSON logging use the same strict verifier without configuration-specific workarounds. |
+| `inspect_watchtower_output(output, returncode, config)` | Parses Watchtower JSON or LogFmt logs, validates one `Session done` record/counters, detects failed updates/errors, and builds a bounded result object. | Converts completed Watchtower output into a reliable `success`/`failure` contract instead of trusting exit code alone. |
 | `_read_runtime_text(path, label)` | Reads a per-run systemd timestamp/exit-code marker and returns the value plus any read error. | Keeps current-run correlation fail-closed without shell interpolation. |
 | `parse_compose_exit_code(output, service)` | Reads `ExitCode` from Docker Compose `ps --format json` output in object, array, or line-delimited forms. | Lets the post-start reporter recover the completed container exit status after systemd has already run it. |
 | `report_watchtower(config, compose_file, service, since_file, exit_code_file)` | Validates safe report mode, uses the captured current-run Compose exit code when supplied, scopes logs with `--since` to the current invocation, fails closed on missing markers, then reports through enabled channels. Manual use without runtime files can still fall back to Compose `ps`. | Prevents stale Watchtower logs/container state from being mistaken for the current run while keeping execution in systemd. |

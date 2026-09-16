@@ -21,6 +21,7 @@ import time
 from email.message import EmailMessage
 import json
 import re
+import shlex
 
 try:
     import paho.mqtt.client as mqtt
@@ -778,17 +779,55 @@ def redact_watchtower_text(text, config):
     return re.sub(r'(?i)(password[=:]\s*)[^\s,;]+', r'\1[redacted]', text)
 
 
+def parse_watchtower_log_record(line):
+    """Parse one Watchtower log line in either JSON or the normal LogFmt/Auto format."""
+    text = str(line).strip()
+    if not text:
+        return None
+
+    try:
+        record = json.loads(text)
+    except ValueError:
+        record = None
+    if isinstance(record, dict):
+        return record
+
+    # Watchtower defaults to Auto, which is LogFmt when stdout is not a TTY.
+    # Tolerate an accidental Compose prefix by starting at the first time= field.
+    marker = text.find('time=')
+    candidate = text[marker:] if marker >= 0 else text
+    try:
+        tokens = shlex.split(candidate, posix=True)
+    except ValueError:
+        return None
+
+    record = {}
+    for token in tokens:
+        if '=' not in token:
+            continue
+        key, value = token.split('=', 1)
+        if key:
+            record[key] = value
+
+    if not record or 'msg' not in record:
+        return None
+
+    # The strict session gate expects real integers, not numeric strings.
+    for field in ('Scanned', 'Updated', 'Failed'):
+        value = record.get(field)
+        if isinstance(value, str) and re.fullmatch(r'\d+', value):
+            record[field] = int(value)
+    return record
+
+
 def inspect_watchtower_output(output, returncode, config):
-    """Restore the strict session check and extract explicit container failures, without guessing names."""
+    """Strictly verify one completed Watchtower session from JSON or LogFmt output."""
     sessions, errors, failed_containers = [], [], []
     warning = False
     for line in output.splitlines():
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue  # Compose progress is plain text; absence of a session still fails.
+        record = parse_watchtower_log_record(line)
         if not isinstance(record, dict):
-            continue
+            continue  # Compose progress/other text is ignored; absence of a session still fails.
         message = str(record.get('msg', ''))
         level = str(record.get('level', '')).lower()
         warning = warning or level in ('warning', 'warn')

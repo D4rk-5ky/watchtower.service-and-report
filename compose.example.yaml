@@ -1,7 +1,8 @@
 # Example dedicated Watchtower Compose stack.
 # Copy it to your own Watchtower directory and replace all placeholders.
-# Keep JSON/info logging enabled: ExecStartPost parses the completed Watchtower
-# session summary from these logs before publishing success/failure over MQTT.
+# JSON is recommended for deterministic machine parsing, but the reporter also accepts
+# Watchtower's normal Auto/LogFmt console output. Keep info-level logging enabled so
+# the completed "Session done" summary is available to ExecStartPost.
 services:
   watchtower:
     container_name: watchtower

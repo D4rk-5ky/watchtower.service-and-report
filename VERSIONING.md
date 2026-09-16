@@ -16,6 +16,15 @@ filesystems cannot also maintain a separate `versioning.md`).
   Exclude bytecode, caches, build output, and temporary files. Verify the archive
   against the supplied file inventory, accounting for authorized moves/removals.
 
+## 0.0.15 — 2026-09-16
+
+- Fix false Watchtower failure reports on production hosts using Watchtower 1.7.1 default `Auto` console logging. In non-TTY Docker output, Watchtower emits LogFmt lines such as `msg="Session done" Failed=0 Scanned=2 Updated=0`; 0.0.14 only parsed JSON and therefore rejected an otherwise successful run.
+- Add `parse_watchtower_log_record()` to accept either JSON or Watchtower LogFmt/Auto lines, using shell-style quote parsing for fields such as `msg="Session done"` and normalizing `Scanned`, `Updated`, and `Failed` to strict integers.
+- Keep the existing strict result gate unchanged after parsing: one completed session, exit code zero, valid non-negative counters, `Updated <= Scanned`, `Failed == 0`, and no explicit error/failed-update records.
+- Keep `WATCHTOWER_LOG_FORMAT: json` in the supplied Compose example as the recommended deterministic setting, but no longer require it; existing production Compose files using Watchtower's default Auto/LogFmt output now work.
+- Add production-log regressions for successful LogFmt output and failed LogFmt summaries while retaining JSON coverage.
+- Preserve the current-run timestamp/exit-code correlation, single-pull systemd flow, optional MQTT/mail behavior, shared-topic HA flow, teardown behavior, redaction, and all 14 project files.
+
 ## 0.0.14 — 2026-09-16
 
 - Fix duplicate Watchtower image pulls. `ExecStartPre` remains the single explicit `docker compose pull watchtower`; `ExecStart` now uses `docker compose up --pull never ...`, and the Compose example no longer declares `pull_policy: always`.

@@ -58,18 +58,19 @@ ExecStop      -> docker compose down as the oneshot returns to stopped
 
 The reporter does **not** start, pull, restart, or rerun Watchtower in this mode. In the systemd flow it reads the captured current-run exit code and calls `docker compose logs --since <this-run-start>` so logs from an older Watchtower container can never satisfy the success check. If the timestamp/exit-code marker is missing or invalid, the result fails closed instead of falling back to historical logs.
 
-For strict verification, the Watchtower Compose service must keep:
+For strict verification, the Watchtower Compose service must keep one-shot/info logging enabled:
 
 ```yaml
 WATCHTOWER_RUN_ONCE: "true"
-WATCHTOWER_LOG_FORMAT: json
 WATCHTOWER_LOG_LEVEL: info
 ```
+
+The reporter accepts both Watchtower JSON logs and the normal `Auto`/`LogFmt` console format used by Watchtower 1.7.1 on non-TTY Docker output. `WATCHTOWER_LOG_FORMAT: json` remains recommended in the supplied Compose example because it is the most deterministic format, but it is no longer required for successful verification.
 
 A successful report requires all of the following from the **current service invocation**:
 
 - the completed Compose service has exit code 0;
-- exactly one valid Watchtower `Session done` JSON record is present;
+- exactly one valid Watchtower `Session done` record is present in JSON or LogFmt form;
 - `Scanned`, `Updated`, and `Failed` are non-negative integers;
 - `Updated <= Scanned`;
 - `Failed == 0`;
