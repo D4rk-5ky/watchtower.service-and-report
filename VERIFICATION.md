@@ -1,13 +1,14 @@
-# Verification — 0.0.13
+# Verification — 0.0.14
 
 Verification was performed on the release source tree without contacting a real MQTT broker, SMTP server, Docker daemon, Home Assistant instance, or issuing a real host power command.
 
 ## Completed checks
 
 - `python3 -m unittest discover -s tests -v`
-  - Result: **43 tests passed**.
+  - Result: **45 tests passed**.
   - Docker, MQTT, mail, and power operations are mocked where external I/O would otherwise occur.
   - New optional-channel regressions cover MQTT-only, mail-only, both channels disabled, both optional sections omitted, missing Paho while MQTT is disabled, disabled-feature settings being ignored, and Watchtower success/failure behavior when no external output channel is enabled.
+  - New current-run regressions verify `--since` log scoping, captured Compose exit-code use, and fail-closed behavior when the timestamp marker is unavailable.
   - Existing regressions still cover report JSON validation, MQTT/mail/power failure gates, sendmail and SMTP backends, systemd command wiring, completed-Watchtower inspection, shared-topic Home Assistant host filtering, `mode: restart`, and shutdown-only-after-success behavior.
 - `python3 -m py_compile mqtt_power_action_none.py tests/test_mqtt_reports.py tests/test_watchtower_flow.py`
   - Result: **passed**.
@@ -21,15 +22,16 @@ Verification was performed on the release source tree without contacting a real 
   - A temporary minimal config containing only `[power]` with `action = none` ran successfully with no `[mqtt]` or `[mail]` section. Output confirmed MQTT was disabled and no power action was performed.
 - Static/unit tests verify the systemd-owned phases remain exactly:
   - `ExecStartPre`: `docker compose ... pull watchtower`
-  - `ExecStart`: `docker compose ... up --abort-on-container-exit --exit-code-from watchtower watchtower`
-  - `ExecStartPost`: Python completed-job reporter using whichever MQTT/mail channels are enabled
+  - `ExecStartPre`: also resets/creates per-run marker state, then performs the only Watchtower pull
+  - `ExecStart`: `docker compose ... up --pull never --abort-on-container-exit --exit-code-from watchtower watchtower`, capturing that command's exit code
+  - `ExecStartPost`: Python reporter uses the current-run timestamp and exit-code marker, so historical logs cannot satisfy success
   - `RemainAfterExit=no`: the completed oneshot does not stay `active (exited)`
   - `ExecStop`: `docker compose ... down` during stop/teardown
 - `systemd-analyze verify ./systemd/watchtower.service` was attempted.
   - The checker reached the unit but this build container has no `docker.service` and no `/usr/bin/docker` executable.
   - It therefore reported those missing environment dependencies; no separate unit syntax error was reported.
 - Privacy/redaction scan across the project tree found no private IPv4 addresses, known prior personal host/device/account labels, or non-placeholder email addresses. Remaining addresses use reserved/example values such as `sender@example.com` and `receiver@example.com`.
-- The release file inventory is compared against 0.0.12 during manifest generation. The prior root `watchtower.service` is accounted for as an authorized move to `systemd/watchtower.service`. The two Syncerate/reference HA YAMLs (`HomeAssistant/syncerate-all-servers.yaml` and the chained Syncerate example `HomeAssistant/home-assistant-automation.yaml`) are accounted for as intentionally excluded reference material. All other prior files remain present.
+- The release file inventory is compared against 0.0.13 during manifest generation. All 14 files from 0.0.13 remain present at the same paths; modified files are explicitly recorded in the manifest and no unrelated file is removed.
 - Final staging is checked for `__pycache__`, `.pyc`, `.pyo`, build cache, and temporary files before ZIP creation.
 
 ## Optional-channel behavior verified
@@ -44,7 +46,7 @@ Verification was performed on the release source tree without contacting a real 
 ## What was not fully tested
 
 - No real Watchtower container was run, so behavior against the target Docker/Compose/Watchtower installation still needs a host test.
-- No real `docker compose ps --format json` output was collected from the target Compose version; parser shapes remain covered offline.
+- No real current-run `docker compose logs --since ...` or runtime-marker flow was exercised against the target Docker daemon; command construction and fail-closed behavior are covered offline.
 - No real MQTT broker, sendmail/Postfix installation, or SMTP provider was contacted.
 - No Home Assistant automation was imported/executed in a live Home Assistant instance. YAML and relevant Jinja/control-flow branches are checked offline.
 - No real shutdown/reboot was performed.

@@ -6,7 +6,6 @@ services:
   watchtower:
     container_name: watchtower
     image: containrrr/watchtower:latest
-    pull_policy: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:

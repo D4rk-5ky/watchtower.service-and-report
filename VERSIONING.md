@@ -16,6 +16,16 @@ filesystems cannot also maintain a separate `versioning.md`).
   Exclude bytecode, caches, build output, and temporary files. Verify the archive
   against the supplied file inventory, accounting for authorized moves/removals.
 
+## 0.0.14 — 2026-09-16
+
+- Fix duplicate Watchtower image pulls. `ExecStartPre` remains the single explicit `docker compose pull watchtower`; `ExecStart` now uses `docker compose up --pull never ...`, and the Compose example no longer declares `pull_policy: always`.
+- Fix false current-run update reports caused by replaying historical logs from an older `watchtower` container. The unit now creates a per-invocation start timestamp under `/run/mqtt-power-action/`, and `ExecStartPost` requests only logs newer than that marker.
+- Capture the actual current `docker compose up` exit code in a per-run runtime file. The reporter uses that value instead of trusting possibly stale `docker compose ps` state from a previous container.
+- Fail closed when a requested run marker is missing, empty, or invalid. The reporter never falls back to unbounded historical logs in the systemd flow.
+- Add `--watchtower-since-file` and `--watchtower-exit-code-file` CLI options used by the packaged systemd service. Manual legacy report mode without those options retains the old `docker compose ps` fallback.
+- Add regressions for current-run log scoping, stale-state avoidance, missing-marker fail-closed behavior, single-pull service wiring, and current-run exit-code capture. Test count increases from 43 to 45.
+- Preserve optional MQTT/mail behavior, shared-topic Home Assistant flow, `mode: restart`, redaction, teardown, and all existing safety gates.
+
 ## 0.0.13 — 2026-09-16
 
 - Change `HomeAssistant/watchtower-manual-update.yaml` from `mode: single` to `mode: restart` so a new manual invocation replaces a still-running previous invocation instead of being rejected. Remove the now-unneeded `max_exceeded: silent` setting.

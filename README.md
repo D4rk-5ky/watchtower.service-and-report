@@ -47,15 +47,16 @@ The supplied `systemd/watchtower.service` intentionally keeps orchestration in s
 
 ```text
 ExecStartPre  -> docker compose pull watchtower
-ExecStart     -> docker compose up ... --exit-code-from watchtower
-ExecStartPost -> mqtt_power_action_none.py reads the completed service status/logs
+ExecStart     -> docker compose up --pull never ... --exit-code-from watchtower
+                and records this invocation's Compose exit code
+ExecStartPost -> mqtt_power_action_none.py reads only this invocation's logs
                  and reports through whichever MQTT/mail channels are enabled
 ExecStop      -> docker compose down as the oneshot returns to stopped
 ```
 
-`ExecStartPre` and `ExecStart` use systemd's leading `-` command prefix so a non-zero Docker/Watchtower exit does not prevent `ExecStartPost` from running. `ExecStartPost` is the final gate: it exits 0 only when the completed Watchtower job is verified successful and every **enabled** reporting channel that was attempted succeeds. Disabled channels are neutral. If MQTT and mail are both disabled, the verified Watchtower result alone controls the unit result.
+`ExecStartPre` performs the only Watchtower image pull. `ExecStart` uses `--pull never`, records the actual Compose command exit code in `/run/mqtt-power-action/`, and deliberately returns control so `ExecStartPost` always runs. `ExecStartPost` is the final gate: it exits 0 only when the completed Watchtower job is verified successful and every **enabled** reporting channel that was attempted succeeds. Disabled channels are neutral. If MQTT and mail are both disabled, the verified Watchtower result alone controls the unit result.
 
-The reporter does **not** start, pull, restart, or rerun Watchtower in this mode. It only runs `docker compose ps` and `docker compose logs` against the already-completed job.
+The reporter does **not** start, pull, restart, or rerun Watchtower in this mode. In the systemd flow it reads the captured current-run exit code and calls `docker compose logs --since <this-run-start>` so logs from an older Watchtower container can never satisfy the success check. If the timestamp/exit-code marker is missing or invalid, the result fails closed instead of falling back to historical logs.
 
 For strict verification, the Watchtower Compose service must keep:
 
@@ -65,7 +66,7 @@ WATCHTOWER_LOG_FORMAT: json
 WATCHTOWER_LOG_LEVEL: info
 ```
 
-A successful report requires all of the following:
+A successful report requires all of the following from the **current service invocation**:
 
 - the completed Compose service has exit code 0;
 - exactly one valid Watchtower `Session done` JSON record is present;
@@ -76,6 +77,11 @@ A successful report requires all of the following:
 - no `Unable to update container ...` record is present.
 
 If the result cannot be verified, the job is treated as `failure` rather than guessing success. If MQTT is enabled, that failure is published as JSON; if mail failure reporting is enabled, it can also be emailed. Even with both channels disabled, `ExecStartPost` returns failure to systemd.
+
+
+### Why the service uses one pull only
+
+`ExecStartPre` already runs `docker compose ... pull watchtower`, so `ExecStart` explicitly uses `--pull never`. This prevents Compose from pulling the Watchtower image a second time during the same service run, even if the Compose file previously used `pull_policy: always`. The supplied Compose example therefore does not set `pull_policy: always`.
 
 ## Install the Watchtower service
 

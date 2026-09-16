@@ -148,6 +148,32 @@ class WatchtowerReportTests(unittest.TestCase):
             self.assertEqual(self.app.report_watchtower(self.cfg, '/opt/watchtower/docker-compose.yaml'), 1)
         self.assertEqual(self.cfg.watchtower_report['status'], 'success')
 
+
+    def test_current_run_markers_scope_logs_and_override_stale_container_state(self):
+        """Systemd mode uses the captured current exit code and --since marker, never stale ps state."""
+        logs = types.SimpleNamespace(returncode=0, stdout=json.dumps(self.session))
+        with patch.object(self.app, '_read_runtime_text', side_effect=[('2026-09-16T10:00:00+00:00', None), ('0', None)]), \
+             patch.object(self.app.subprocess, 'run', return_value=logs) as docker, \
+             patch.object(self.app, 'publish_mqtt', return_value=(True, 'sent')), \
+             patch.object(self.app, 'send_mail', return_value=True), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.app.report_watchtower(self.cfg, '/compose', 'watchtower', '/run/start', '/run/exit'), 0)
+        command = docker.call_args.args[0]
+        self.assertIn('--since', command)
+        self.assertIn('2026-09-16T10:00:00+00:00', command)
+        self.assertNotIn('ps', command)
+
+    def test_missing_current_run_marker_fails_closed_without_replaying_history(self):
+        """A missing requested timestamp must not fall back to unbounded historical container logs."""
+        with patch.object(self.app, '_read_runtime_text', side_effect=[(None, 'marker missing'), ('1', None)]), \
+             patch.object(self.app.subprocess, 'run') as docker, \
+             patch.object(self.app, 'publish_mqtt', return_value=(True, 'sent')), \
+             patch.object(self.app, 'send_mail', return_value=True), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.app.report_watchtower(self.cfg, '/compose', 'watchtower', '/run/start', '/run/exit'), 1)
+        docker.assert_not_called()
+        self.assertEqual(self.cfg.watchtower_report['status'], 'failure')
+
     def test_preflight_and_cli(self):
         for section, option, value in [('power', 'action', 'shutdown'),
                                        ('mqtt', 'retain', 'true'),

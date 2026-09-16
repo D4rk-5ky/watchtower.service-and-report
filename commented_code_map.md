@@ -1,6 +1,6 @@
 # Commented Code Map
 
-This file maps the current 0.0.13 code and operational commands. It describes what each function/command does and why it exists.
+This file maps the current 0.0.14 code and operational commands. It describes what each function/command does and why it exists.
 
 ## Project files
 
@@ -52,9 +52,10 @@ This file maps the current 0.0.13 code and operational commands. It describes wh
 | `run_power_action(config)` | Performs/dry-runs `systemctl poweroff` or `systemctl reboot`, or no-ops for `none`. | Centralizes the dangerous local power action behind configuration safety checks. |
 | `redact_watchtower_text(text, config)` | Removes configured secrets, URL credentials, and common password assignments from forwarded diagnostics. | Reduces accidental credential disclosure in MQTT/email result fields. |
 | `inspect_watchtower_output(output, returncode, config)` | Parses Watchtower JSON logs, validates one `Session done` record/counters, detects failed updates/errors, and builds a bounded result object. | Converts completed Watchtower output into a reliable `success`/`failure` contract instead of trusting exit code alone. |
+| `_read_runtime_text(path, label)` | Reads a per-run systemd timestamp/exit-code marker and returns the value plus any read error. | Keeps current-run correlation fail-closed without shell interpolation. |
 | `parse_compose_exit_code(output, service)` | Reads `ExitCode` from Docker Compose `ps --format json` output in object, array, or line-delimited forms. | Lets the post-start reporter recover the completed container exit status after systemd has already run it. |
-| `report_watchtower(config, compose_file, service)` | Validates safe report-mode settings, runs only Compose `ps` and `logs`, creates the verified report, uses whichever MQTT/mail channels are enabled, and returns 0/1. Disabled channels are neutral. | Keeps Watchtower execution in systemd and preserves a meaningful systemd success/failure result even when no external notification channel is enabled. |
-| `parse_args()` | Defines `-c/--config`, `--watchtower-compose`, and `--watchtower-service`. | Makes ordinary/report mode explicit and self-documented via `--help`. |
+| `report_watchtower(config, compose_file, service, since_file, exit_code_file)` | Validates safe report mode, uses the captured current-run Compose exit code when supplied, scopes logs with `--since` to the current invocation, fails closed on missing markers, then reports through enabled channels. Manual use without runtime files can still fall back to Compose `ps`. | Prevents stale Watchtower logs/container state from being mistaken for the current run while keeping execution in systemd. |
+| `parse_args()` | Defines `-c/--config`, `--watchtower-compose`, `--watchtower-service`, `--watchtower-since-file`, and `--watchtower-exit-code-file`. | Makes ordinary/report mode explicit and self-documented via `--help`. |
 | `main()` | Dispatches Watchtower report mode or ordinary optional-MQTT/optional-mail/power mode and enforces failure gates only for enabled channels. | Provides the single application entry point. |
 
 ## systemd service directives and commands
@@ -67,9 +68,11 @@ This file maps the current 0.0.13 code and operational commands. It describes wh
 | `Type=oneshot` | systemd waits for the update/report sequence to complete. |
 | `RemainAfterExit=no` | Lets a successful one-shot return to the inactive/stopped state immediately after `ExecStartPost` finishes, so another `systemctl start` can run the job again without a prior stop/restart. |
 | `WorkingDirectory=/opt/watchtower` | Example directory containing the dedicated Compose file; user must customize it. |
-| `ExecStartPre=-/usr/bin/docker compose -f docker-compose.yaml pull watchtower` | Pulls the Watchtower image. The leading `-` prevents a pre-start non-zero exit from skipping the later result reporter. |
-| `ExecStart=-/usr/bin/docker compose -f docker-compose.yaml up --abort-on-container-exit --exit-code-from watchtower watchtower` | Runs/waits for the one-shot service. The leading `-` deliberately allows `ExecStartPost` to run after a non-zero Watchtower/Docker result. |
-| `ExecStartPost=/usr/bin/python3 ... --watchtower-compose ... --watchtower-service watchtower` | Reads the completed job and inspects the verified result and reports it through enabled channels. Its exit code becomes the final success/failure gate. |
+| `RuntimeDirectory=mqtt-power-action` | Creates `/run/mqtt-power-action` for per-invocation timestamp and exit-code markers. |
+| timestamp/reset `ExecStartPre` commands | Remove stale marker files and record this service invocation start time before Docker work begins. |
+| `ExecStartPre=-/usr/bin/docker compose -f docker-compose.yaml pull watchtower` | Pulls the Watchtower image exactly once. The leading `-` allows an existing local image to be tried and the final result to be reported if the pull fails. |
+| `ExecStart=/bin/sh -c ... docker compose ... up --pull never ...` | Runs/waits for the one-shot service without a second pull, writes the actual current Compose exit code to `/run/mqtt-power-action/watchtower-exit-code`, then returns control so post-reporting always runs. |
+| `ExecStartPost=/usr/bin/python3 ... --watchtower-since-file ... --watchtower-exit-code-file ...` | Reads only current-invocation logs and the captured current Compose exit code, reports the verified result through enabled channels, and becomes the final success/failure gate. |
 | `ExecStop=/usr/bin/docker compose -f docker-compose.yaml down` | Tears down the dedicated Compose project when the non-remaining oneshot enters its stop phase after reporting, and on an explicit stop. |
 | `TimeoutStartSec=0` | Does not impose a systemd startup timeout on the update. |
 | `TimeoutStopSec=120` | Bounds the stop/teardown phase. |
@@ -86,7 +89,7 @@ This file maps the current 0.0.13 code and operational commands. It describes wh
 | `python3 mqtt_power_action_none.py --help` | Show all application flags. |
 | `python3 mqtt_power_action_none.py -c PATH` | Ordinary configured flow with independently optional MQTT/mail plus optional power action. |
 | `python3 mqtt_power_action_none.py --config PATH` | Long-form equivalent of `-c`. |
-| `python3 mqtt_power_action_none.py -c PATH --watchtower-compose FILE --watchtower-service NAME` | Inspect an already-completed Compose Watchtower service and process its verified result and use the enabled notification channels. |
+| `python3 mqtt_power_action_none.py -c PATH --watchtower-compose FILE --watchtower-service NAME [--watchtower-since-file FILE] [--watchtower-exit-code-file FILE]` | Inspect an already-completed Compose Watchtower service and process its verified result and use the enabled notification channels. |
 | `cat VERSION` | Show package version. |
 | `python3 -m unittest discover -s tests -v` | Run offline regression tests. |
 | `python3 -m py_compile ...` | Check Python syntax without executing external actions. |

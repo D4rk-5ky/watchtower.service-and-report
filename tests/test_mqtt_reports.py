@@ -445,7 +445,7 @@ class ReportTests(unittest.TestCase):
             args[3] = args[3].replace('config-sendmail-none.example.ini', filename)
             self.assertEqual(args[0], '/usr/bin/python3')
             self.assertEqual(args[2], '-c')
-            self.assertEqual(args[4:], ['--watchtower-compose', '/opt/watchtower/docker-compose.yaml', '--watchtower-service', 'watchtower'])
+            self.assertEqual(args[4:], ['--watchtower-compose', '/opt/watchtower/docker-compose.yaml', '--watchtower-service', 'watchtower', '--watchtower-since-file', '/run/mqtt-power-action/watchtower-started-at', '--watchtower-exit-code-file', '/run/mqtt-power-action/watchtower-exit-code'])
             script = ROOT / PurePosixPath(args[1]).relative_to(install_root)
             config = ROOT / PurePosixPath(args[3]).relative_to(install_root)
             self.assertEqual(script, ROOT / 'mqtt_power_action_none.py')
@@ -457,15 +457,20 @@ class ReportTests(unittest.TestCase):
         """The unit keeps pull/up/report phases in ExecStartPre/ExecStart/ExecStartPost."""
         unit, _ = self.service_settings()
         self.assertEqual(unit['WorkingDirectory'], ['/opt/watchtower'])
-        self.assertEqual(shlex.split(unit['ExecStartPre'][0]),
+        self.assertEqual(len(unit['ExecStartPre']), 3)
+        self.assertEqual(shlex.split(unit['ExecStartPre'][-1]),
                          ['-/usr/bin/docker', 'compose', '-f', 'docker-compose.yaml', 'pull', 'watchtower'])
-        self.assertEqual(shlex.split(unit['ExecStart'][0]),
-                         ['-/usr/bin/docker', 'compose', '-f', 'docker-compose.yaml', 'up',
-                          '--abort-on-container-exit', '--exit-code-from', 'watchtower', 'watchtower'])
+        start_text = unit['ExecStart'][0]
+        self.assertIn('docker compose -f docker-compose.yaml up --pull never', start_text)
+        self.assertIn('watchtower-exit-code', start_text)
+        self.assertNotIn('pull watchtower', start_text)
         post = shlex.split(unit['ExecStartPost'][0])
         self.assertEqual(post[0], '/usr/bin/python3')
-        self.assertEqual(post[-4:], ['--watchtower-compose', '/opt/watchtower/docker-compose.yaml',
-                                    '--watchtower-service', 'watchtower'])
+        self.assertEqual(post[-8:], ['--watchtower-compose', '/opt/watchtower/docker-compose.yaml',
+                                    '--watchtower-service', 'watchtower',
+                                    '--watchtower-since-file', '/run/mqtt-power-action/watchtower-started-at',
+                                    '--watchtower-exit-code-file', '/run/mqtt-power-action/watchtower-exit-code'])
+        self.assertEqual(unit['RuntimeDirectory'], ['mqtt-power-action'])
         self.assertEqual(shlex.split(unit['ExecStop'][0]),
                          ['/usr/bin/docker', 'compose', '-f', 'docker-compose.yaml', 'down'])
         self.assertEqual(unit['Type'], ['oneshot'])
@@ -487,16 +492,17 @@ class ReportTests(unittest.TestCase):
                 local_args = [str(ROOT / PurePosixPath(arguments[1]).relative_to(install_root)),
                               '--config', str(ROOT / PurePosixPath(arguments[3]).relative_to(install_root))] + arguments[4:]
                 with patch.object(sys, 'argv', local_args), \
+                     patch.object(self.app, '_read_runtime_text', side_effect=[('2026-09-16T10:00:00+00:00', None), ('0', None)]), \
                      patch.object(self.app, 'publish_mqtt', return_value=(True, 'mock MQTT')) as publish, \
                      patch.object(self.app, 'send_mail', return_value=True) as mail, \
-                     patch.object(self.app.subprocess, 'run', side_effect=[ps, logs]) as docker, \
+                     patch.object(self.app.subprocess, 'run', side_effect=[logs]) as docker, \
                      contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(SystemExit) as done:
                         self.app.main()
                     self.assertEqual(done.exception.code, 0)
                 publish.assert_called_once()
                 mail.assert_called_once()
-                self.assertEqual(docker.call_count, 2)
+                self.assertEqual(docker.call_count, 1)
                 cfg = publish.call_args.args[0]
                 self.assertEqual(cfg.get('mail', 'backend'), backend)
                 self.assertEqual(cfg.get('power', 'action'), 'none')

@@ -1,172 +1,94 @@
 {
-  "version": "0.0.13",
-  "archive_root": "mqtt-power-action-0.0.13",
+  "version": "0.0.14",
+  "archive_root": "mqtt-power-action-0.0.14",
   "hash_algorithm": "SHA-256",
   "self_hash_note": "The manifest self-entry has null hash/size. The external ZIP checksum covers it.",
-  "original_file_comparison": [
-    {
-      "supplied_filename": "mqtt_power_action_none.py",
-      "current_path": "mqtt_power_action_none.py",
-      "comparison": "unchanged from 0.0.12"
-    },
-    {
-      "supplied_filename": "watchtower.service",
-      "current_path": "systemd/watchtower.service",
-      "comparison": "moved into systemd/ as requested"
-    },
-    {
-      "supplied_filename": "config-sendmail-none.example.ini",
-      "current_path": "configs/config-sendmail-none.example.ini",
-      "comparison": "updated comments in documented release"
-    }
-  ],
-  "previous_release_accounting": [
-    {
-      "previous_path": "HomeAssistant/home-assistant-automation.yaml",
-      "current_path": null,
-      "status": "removed at user request; chained Syncerate/MQTT reference example only"
-    },
-    {
-      "previous_path": "HomeAssistant/syncerate-all-servers.yaml",
-      "current_path": null,
-      "status": "removed at user request; Syncerate MQTT reference example only"
-    },
-    {
-      "previous_path": "HomeAssistant/watchtower-manual-update.yaml",
-      "current_path": "HomeAssistant/watchtower-manual-update.yaml",
-      "status": "updated"
-    },
-    {
-      "previous_path": "README.md",
-      "current_path": "README.md",
-      "status": "updated"
-    },
-    {
-      "previous_path": "VERIFICATION.md",
-      "current_path": "VERIFICATION.md",
-      "status": "updated"
-    },
-    {
-      "previous_path": "VERSION",
-      "current_path": "VERSION",
-      "status": "updated"
-    },
-    {
-      "previous_path": "VERSIONING.md",
-      "current_path": "VERSIONING.md",
-      "status": "updated"
-    },
-    {
-      "previous_path": "commented_code_map.md",
-      "current_path": "commented_code_map.md",
-      "status": "updated"
-    },
-    {
-      "previous_path": "compose.example.yaml",
-      "current_path": "compose.example.yaml",
-      "status": "unchanged"
-    },
-    {
-      "previous_path": "configs/config-sendmail-none.example.ini",
-      "current_path": "configs/config-sendmail-none.example.ini",
-      "status": "updated"
-    },
-    {
-      "previous_path": "configs/config-smtp.example.ini",
-      "current_path": "configs/config-smtp.example.ini",
-      "status": "updated"
-    },
-    {
-      "previous_path": "mqtt_power_action_none.py",
-      "current_path": "mqtt_power_action_none.py",
-      "status": "unchanged"
-    },
-    {
-      "previous_path": "tests/test_mqtt_reports.py",
-      "current_path": "tests/test_mqtt_reports.py",
-      "status": "updated"
-    },
-    {
-      "previous_path": "tests/test_watchtower_flow.py",
-      "current_path": "tests/test_watchtower_flow.py",
-      "status": "updated"
-    },
-    {
-      "previous_path": "watchtower.service",
-      "current_path": "systemd/watchtower.service",
-      "status": "moved"
-    }
-  ],
+  "previous_release": "0.0.13",
+  "previous_release_removed_paths": [],
   "files": [
     {
       "path": "HomeAssistant/watchtower-manual-update.yaml",
       "size": 5753,
-      "sha256": "55af2f569f9da1132b1db402911c097a69c5e5a3ae60d376972840f4777eb8d9"
-    },
-    {
-      "path": "MANIFEST.json",
-      "size": null,
-      "sha256": null
+      "sha256": "55af2f569f9da1132b1db402911c097a69c5e5a3ae60d376972840f4777eb8d9",
+      "vs_0.0.13": "unchanged"
     },
     {
       "path": "README.md",
-      "size": 15689,
-      "sha256": "122b897f30567ca459084e8f014d7bdfa6c61b683033e1d13d51ac1794c5ad00"
+      "size": 16498,
+      "sha256": "4065b70ad6e78962089dd40d5b3ed91fcacdd5fc6e5e9ac56f2e8379d881acdf",
+      "vs_0.0.13": "updated"
     },
     {
       "path": "VERIFICATION.md",
-      "size": 6279,
-      "sha256": "86df29d9257501c2e4fbdcbf6520d1292821af72bbfbdf15403d8dce7fa71f18"
+      "size": 6457,
+      "sha256": "59de223e21842237731a8d69333493971d92b4350e5d9e03b8c1441d275c835c",
+      "vs_0.0.13": "updated"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "4e2cfd99f6017055138f4ee98534be3d0a2bfb6872a023df2770fea483135b73"
+      "sha256": "0f63b381bd90c7ea26cb2d670dca30aed0d0ddf72a353623e73202f322aec657",
+      "vs_0.0.13": "updated"
     },
     {
       "path": "VERSIONING.md",
-      "size": 21455,
-      "sha256": "9938c7aa78c1dda56122e119f9fa5af7824cfb7aa87195148812df3462450566"
+      "size": 22902,
+      "sha256": "a68cce36f3d8a69f0294979b849772e926a99a20f2ce137076a31a7d9dd7134d",
+      "vs_0.0.13": "updated"
     },
     {
       "path": "commented_code_map.md",
-      "size": 13410,
-      "sha256": "113667a3678ee540399b222f88f3009cc73d49ac40e111775209fc24dfbb783a"
+      "size": 14172,
+      "sha256": "b864aee63d9134803825b92c24e3f4a62d43fbf94d28084894db79ca42a9e81b",
+      "vs_0.0.13": "updated"
     },
     {
       "path": "compose.example.yaml",
-      "size": 1405,
-      "sha256": "7d0814b34ec98730af2651ffe2182d22ebb109c4ebc2c035c63fb46de2e981d5"
+      "size": 1381,
+      "sha256": "033aee8bf5aa0e74aa948233c1383f491db0b1b3a2101583733ebb85c68b1ccd",
+      "vs_0.0.13": "updated"
     },
     {
       "path": "configs/config-sendmail-none.example.ini",
       "size": 7919,
-      "sha256": "b9a232001ab2756e29908a1111cbec60022dbbb824c1ac11abec19f118218466"
+      "sha256": "b9a232001ab2756e29908a1111cbec60022dbbb824c1ac11abec19f118218466",
+      "vs_0.0.13": "unchanged"
     },
     {
       "path": "configs/config-smtp.example.ini",
       "size": 6576,
-      "sha256": "0fe8f72c690a7d328df236766e95d7d23e91f007252f28a7b5abbf9810eeb8cf"
+      "sha256": "0fe8f72c690a7d328df236766e95d7d23e91f007252f28a7b5abbf9810eeb8cf",
+      "vs_0.0.13": "unchanged"
     },
     {
       "path": "mqtt_power_action_none.py",
-      "size": 42837,
-      "sha256": "95275dfa8472974e14e8f43b82c229231440472295c1e467a283cfc7d9eaf8d0"
+      "size": 44697,
+      "sha256": "62d58f4be594a8011fe58a92821cbefe4b0aacbf1cd697e4760b19aa3f008d85",
+      "vs_0.0.13": "updated"
     },
     {
       "path": "systemd/watchtower.service",
-      "size": 1723,
-      "sha256": "739899fe63e1919a8716bab4439816a9f52902473513d5fb5a5b8034b8363dea"
+      "size": 2117,
+      "sha256": "f8142428f3724052eb0fd7178e5db178b6ddaebb626ed3e952c1a89f6cb52be8",
+      "vs_0.0.13": "updated"
     },
     {
       "path": "tests/test_mqtt_reports.py",
-      "size": 33288,
-      "sha256": "eefcf62442b6dccea8850c857f4770aee6957de27252994f0694fb02cee9476f"
+      "size": 33916,
+      "sha256": "6ebd150bb452a76b8becdb7a97c687f13ef6b47ccaca0a847660644e1dccb35f",
+      "vs_0.0.13": "updated"
     },
     {
       "path": "tests/test_watchtower_flow.py",
-      "size": 15286,
-      "sha256": "c3c46e785f260d3cf2fd6b1698198ae68d782ac856e5609160454d4c1f88f14e"
+      "size": 17107,
+      "sha256": "4932ad780d9f3b69cf4efb59a108159036140ac8d866a7c1f7a9b4ccd3b91679",
+      "vs_0.0.13": "updated"
+    },
+    {
+      "path": "MANIFEST.json",
+      "size": null,
+      "sha256": null,
+      "vs_0.0.13": "updated"
     }
   ]
 }

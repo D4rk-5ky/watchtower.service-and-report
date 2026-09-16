@@ -9,6 +9,7 @@
 import argparse
 import configparser
 import os
+from pathlib import Path
 import shutil
 import smtplib
 import socket
@@ -894,8 +895,21 @@ def parse_compose_exit_code(output, service):
     return None
 
 
-def report_watchtower(config, compose_file, service='watchtower'):
-    """Inspect the completed systemd-owned Compose job and report through enabled channels."""
+def _read_runtime_text(path, label):
+    """Read a systemd per-run marker safely; return (value, error)."""
+    if not path:
+        return None, None
+    try:
+        value = Path(path).read_text(encoding='utf-8').strip()
+    except (OSError, UnicodeError) as error:
+        return None, f'Could not read {label}: {error}'
+    if not value:
+        return None, f'{label} is empty'
+    return value, None
+
+
+def report_watchtower(config, compose_file, service='watchtower', since_file=None, exit_code_file=None):
+    """Inspect only the current systemd-owned Compose job and report through enabled channels."""
     if get_str(config, 'power', 'action', required=True) != 'none':
         config_error('Watchtower report mode requires [power] action = none; Home Assistant owns shutdown')
     mqtt_enabled = feature_enabled(config, 'mqtt')
@@ -906,44 +920,73 @@ def report_watchtower(config, compose_file, service='watchtower'):
     if not service or service.startswith('-'):
         config_error('Watchtower Compose service must be nonempty and not start with a dash')
 
-    # systemd already ran and waited for Compose. This post-start phase only reads
-    # the completed container status and logs; it never starts, pulls, or restarts it.
-    ps_command = ['/usr/bin/docker', 'compose', '-f', compose_file,
-                  'ps', '-a', '--format', 'json', service]
-    logs_command = ['/usr/bin/docker', 'compose', '-f', compose_file,
-                    'logs', '--no-color', '--no-log-prefix', service]
+    since_value, since_error = _read_runtime_text(since_file, 'Watchtower start marker')
+    exit_value, exit_error = _read_runtime_text(exit_code_file, 'Watchtower Compose exit-code marker')
 
     ps_output = ''
     ps_rc = 1
-    try:
-        ps_result = subprocess.run(ps_command, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   text=True, encoding='utf-8', errors='replace')
-        ps_output, ps_rc = ps_result.stdout or '', ps_result.returncode
-    except OSError as error:
-        ps_output = f'Could not inspect Docker Compose service status: {error}'
+    compose_exit_code = None
+    diagnostics = []
 
-    compose_exit_code = parse_compose_exit_code(ps_output, service) if ps_rc == 0 else None
+    # The systemd path supplies the authoritative current-run exit-code file.
+    # Manual/legacy CLI use without that file falls back to Compose ps inspection.
+    if exit_code_file:
+        if exit_error:
+            diagnostics.append(exit_error)
+        elif not re.fullmatch(r'-?\d+', exit_value or ''):
+            diagnostics.append('Watchtower Compose exit-code marker is invalid')
+        else:
+            compose_exit_code = int(exit_value)
+    else:
+        ps_command = ['/usr/bin/docker', 'compose', '-f', compose_file,
+                      'ps', '-a', '--format', 'json', service]
+        try:
+            ps_result = subprocess.run(ps_command, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       text=True, encoding='utf-8', errors='replace')
+            ps_output, ps_rc = ps_result.stdout or '', ps_result.returncode
+        except OSError as error:
+            ps_output = f'Could not inspect Docker Compose service status: {error}'
+        compose_exit_code = parse_compose_exit_code(ps_output, service) if ps_rc == 0 else None
+        if compose_exit_code is None:
+            compose_exit_code = ps_rc if ps_rc != 0 else 1
+
     if compose_exit_code is None:
-        compose_exit_code = ps_rc if ps_rc != 0 else 1
+        compose_exit_code = 1
+
+    logs_command = ['/usr/bin/docker', 'compose', '-f', compose_file,
+                    'logs', '--no-color', '--no-log-prefix']
+    if since_file:
+        if since_error:
+            diagnostics.append(since_error)
+        else:
+            logs_command += ['--since', since_value]
+    logs_command.append(service)
 
     log_output = ''
     logs_rc = 1
-    try:
-        logs_result = subprocess.run(logs_command, stdin=subprocess.DEVNULL,
-                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, encoding='utf-8', errors='replace')
-        log_output, logs_rc = logs_result.stdout or '', logs_result.returncode
-    except OSError as error:
-        log_output = f'Could not read Docker Compose service logs: {error}'
+    # Fail closed: if a requested per-run marker is unavailable, never fall back to
+    # unbounded historical logs, because an old successful session could look current.
+    if since_file and since_error:
+        log_output = since_error
+    else:
+        try:
+            logs_result = subprocess.run(logs_command, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                         text=True, encoding='utf-8', errors='replace')
+            log_output, logs_rc = logs_result.stdout or '', logs_result.returncode
+        except OSError as error:
+            log_output = f'Could not read Docker Compose service logs: {error}'
 
-    # If log retrieval itself fails, make the completed job unverifiable even if
-    # Compose reported exit 0. Include inspection diagnostics in the bounded report.
-    output = log_output
+    output_parts = [log_output]
+    if diagnostics:
+        output_parts.extend(diagnostics)
     if logs_rc != 0:
-        output = (log_output + '\n' + ps_output).strip()
+        if ps_output:
+            output_parts.append(ps_output)
         if compose_exit_code == 0:
             compose_exit_code = logs_rc or 1
+    output = '\n'.join(part for part in output_parts if part).strip()
 
     print(redact_watchtower_text(output, config), flush=True)
     report = inspect_watchtower_output(output, compose_exit_code, config)
@@ -965,8 +1008,6 @@ def report_watchtower(config, compose_file, service='watchtower'):
             mail_ok = False
             print(redact_watchtower_text(f'Mail reporting failed: {error}', config))
 
-    # Disabled output channels are neutral. ExecStartPost fails only for a failed
-    # Watchtower job or for an enabled notification channel that actually failed.
     return 0 if report['status'] == 'success' and mqtt_ok and mail_ok else 1
 
 
@@ -988,6 +1029,8 @@ def parse_args():
 
     parser.add_argument('--watchtower-compose', metavar='FILE', help='Inspect the completed Watchtower Compose job at FILE and report its verified outcome through enabled channels; this does not start Docker.')
     parser.add_argument('--watchtower-service', default='watchtower', help='Compose service name for Watchtower mode (default: watchtower).')
+    parser.add_argument('--watchtower-since-file', metavar='FILE', help='Read only Watchtower logs since the timestamp stored in FILE; fail closed if the requested marker is unavailable.')
+    parser.add_argument('--watchtower-exit-code-file', metavar='FILE', help='Use the current Compose invocation exit code stored in FILE instead of possibly stale container state.')
     return parser.parse_args()
 
 
@@ -1004,7 +1047,8 @@ def main():
     # Load and validate config before doing any external actions.
     config = load_config(args.config)
     if getattr(args, 'watchtower_compose', None):
-        sys.exit(report_watchtower(config, args.watchtower_compose, args.watchtower_service))
+        sys.exit(report_watchtower(config, args.watchtower_compose, args.watchtower_service,
+                                   args.watchtower_since_file, args.watchtower_exit_code_file))
 
     mail_enabled = feature_enabled(config, "mail")
     mail_on_success = mail_enabled and get_bool(config, "mail", "on_success", default=False)
