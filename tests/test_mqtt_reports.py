@@ -148,34 +148,107 @@ class ReportTests(unittest.TestCase):
             mail.assert_not_called()
             power.assert_not_called()
 
-    def test_published_payload_and_exact_topics(self):
-        """Inspect actual publish arguments for both subscribed topics and report outcomes."""
-        automation = (ROOT / 'HomeAssistant' / 'home-assistant-automation.yaml').read_text(encoding='utf-8')
-        topics = ['homeassistant/Syncerate/example-job-a/status',
-                  'homeassistant/Syncerate/example-job-b/status']
-        for topic in topics:
-            self.assertIn('topic: ' + topic, automation)
-            for status in ['success', 'failure']:
-                with self.subTest(topic=topic, status=status):
-                    self.cfg.set('mqtt', 'topic', topic)
-                    self.cfg.set('report', 'status', status)
-                    client = Mock()
-                    client.connect.side_effect = lambda *args, **kwargs: client.on_connect(client, None, None, 0)
-                    client.publish.return_value = Mock(rc=0, is_published=Mock(return_value=True))
-                    with patch.object(self.app, 'make_mqtt_client', return_value=client):
-                        self.assertTrue(self.app.publish_mqtt(self.cfg)[0])
-                    call = client.publish.call_args
-                    self.assertEqual(call.args[0], topic)
-                    self.assertEqual(call.kwargs['qos'], 1)
-                    self.assertIs(call.kwargs['retain'], False)
-                    report = json.loads(call.kwargs['payload'])
-                    self.assertIsInstance(report, dict)
-                    self.assertEqual(str(report['status']).strip().lower(), status)
-                    self.assertIsInstance(report['title'], str)
-                    self.assertIs(type(report['exit_code']), int)
-                    self.assertIs(type(report['warning']), bool)
-                    client.disconnect.assert_called_once()
-                    client.loop_stop.assert_called_once()
+    def test_published_payload_and_shared_topic(self):
+        """One shared subscription can receive either outcome; status lives in JSON."""
+        automation = (ROOT / 'HomeAssistant' / 'watchtower-manual-update.yaml').read_text(encoding='utf-8')
+        topic = 'homeassistant/watchtower/status'
+        self.assertEqual(automation.count('topic: ' + topic), 1)
+        for status in ['success', 'failure']:
+            with self.subTest(status=status):
+                self.cfg.set('mqtt', 'topic', topic)
+                self.cfg.set('report', 'status', status)
+                client = Mock()
+                client.connect.side_effect = lambda *args, **kwargs: client.on_connect(client, None, None, 0)
+                client.publish.return_value = Mock(rc=0, is_published=Mock(return_value=True))
+                with patch.object(self.app, 'make_mqtt_client', return_value=client):
+                    self.assertTrue(self.app.publish_mqtt(self.cfg)[0])
+                call = client.publish.call_args
+                self.assertEqual(call.args[0], topic)
+                self.assertEqual(call.kwargs['qos'], 1)
+                self.assertIs(call.kwargs['retain'], False)
+                report = json.loads(call.kwargs['payload'])
+                self.assertIsInstance(report, dict)
+                self.assertEqual(str(report['status']).strip().lower(), status)
+                self.assertIsInstance(report['title'], str)
+                self.assertIs(type(report['exit_code']), int)
+                self.assertIs(type(report['warning']), bool)
+                client.disconnect.assert_called_once()
+                client.loop_stop.assert_called_once()
+
+    def test_optional_mqtt_disabled_needs_no_paho_or_mqtt_settings(self):
+        """Disabled MQTT is a dependency-free no-op and ignores unused MQTT settings."""
+        self.cfg.set('mqtt', 'enabled', 'false')
+        self.cfg.remove_option('mqtt', 'host')
+        self.cfg.remove_option('mqtt', 'topic')
+        self.cfg.set('mqtt', 'qos', '99')
+        self.cfg.set('mqtt', 'message', 'not JSON')
+        self.app.mqtt = None
+        with patch.object(self.app.configparser, 'ConfigParser', return_value=self.cfg), \
+             patch.object(self.cfg, 'read', return_value=['disabled-mqtt.ini']):
+            loaded = self.app.load_config('disabled-mqtt.ini')
+        self.assertIs(loaded, self.cfg)
+        with patch.object(self.app, 'make_mqtt_client') as client:
+            self.assertEqual(self.app.publish_mqtt(self.cfg),
+                             (True, 'MQTT disabled by configuration.'))
+        client.assert_not_called()
+
+    def test_optional_mail_disabled_ignores_unused_mail_settings(self):
+        """Disabled mail ignores backend/recipient/SMTP settings and never sends."""
+        self.cfg.set('mail', 'enabled', 'false')
+        self.cfg.set('mail', 'backend', 'invalid-backend')
+        self.cfg.set('mail', 'to', '')
+        self.cfg.set('mail', 'on_success', 'true')
+        self.cfg.set('mail', 'on_failure', 'true')
+        with patch.object(self.app.configparser, 'ConfigParser', return_value=self.cfg), \
+             patch.object(self.cfg, 'read', return_value=['disabled-mail.ini']):
+            loaded = self.app.load_config('disabled-mail.ini')
+        self.assertIs(loaded, self.cfg)
+        with patch.object(self.app, 'build_mail_message') as build, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(self.app.send_mail(self.cfg, 'success', 'unused'))
+        build.assert_not_called()
+
+    def test_omitted_optional_sections_are_disabled(self):
+        """A config may omit both optional output sections entirely."""
+        self.cfg.remove_section('mqtt')
+        self.cfg.remove_section('mail')
+        self.app.mqtt = None
+        with patch.object(self.app.configparser, 'ConfigParser', return_value=self.cfg), \
+             patch.object(self.cfg, 'read', return_value=['local-only.ini']):
+            loaded = self.app.load_config('local-only.ini')
+        self.assertFalse(self.app.feature_enabled(loaded, 'mqtt'))
+        self.assertFalse(self.app.feature_enabled(loaded, 'mail'))
+        self.assertEqual(self.app.publish_mqtt(loaded),
+                         (True, 'MQTT disabled by configuration.'))
+
+    def test_mqtt_only_mode_never_sends_mail(self):
+        """mail.enabled=false leaves MQTT and the later power path independent."""
+        self.cfg.set('mail', 'enabled', 'false')
+        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), \
+             patch.object(self.app, 'load_config', return_value=self.cfg), \
+             patch.object(self.app, 'publish_mqtt', return_value=(True, 'sent')) as publish, \
+             patch.object(self.app, 'send_mail') as mail, \
+             patch.object(self.app, 'run_power_action') as power, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.app.main()
+        publish.assert_called_once_with(self.cfg)
+        mail.assert_not_called()
+        power.assert_called_once_with(self.cfg)
+
+    def test_mail_only_mode_needs_no_mqtt_transport(self):
+        """mqtt.enabled=false can still send success mail without constructing a Paho client."""
+        self.cfg.set('mqtt', 'enabled', 'false')
+        self.app.mqtt = None
+        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), \
+             patch.object(self.app, 'load_config', return_value=self.cfg), \
+             patch.object(self.app, 'make_mqtt_client') as client, \
+             patch.object(self.app, 'send_mail', return_value=True) as mail, \
+             patch.object(self.app, 'run_power_action') as power, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.app.main()
+        client.assert_not_called()
+        mail.assert_called_once_with(self.cfg, 'success', 'MQTT disabled by configuration.')
+        power.assert_called_once_with(self.cfg)
 
     def test_none_and_dry_run_guards(self):
         """Every original action/dry-run combination retains its command suppression."""
@@ -243,6 +316,9 @@ class ReportTests(unittest.TestCase):
             with self.subTest(name=name):
                 cfg = self.app.load_config(str(ROOT / 'configs' / name))
                 self.assertEqual(cfg.get('mail', 'backend'), backend)
+                self.assertTrue(cfg.getboolean('mqtt', 'enabled'))
+                self.assertTrue(cfg.getboolean('mail', 'enabled'))
+                self.assertEqual(sum(len(cfg.items(section)) for section in cfg.sections()), 43)
                 self.assertEqual(cfg.get('power', 'action'), action)
                 self.assertTrue(cfg.getboolean('power', 'dry_run'))
                 self.assertFalse(cfg.getboolean('power', 'continue_on_mqtt_fail'))
@@ -339,7 +415,7 @@ class ReportTests(unittest.TestCase):
         """Read shipped unit directives/variables for static wiring checks, not systemd emulation."""
         directives = {}
         environment = {}
-        for line in (ROOT / 'watchtower.service').read_text().splitlines():
+        for line in (ROOT / 'systemd/watchtower.service').read_text().splitlines():
             if not line or line.startswith(('#', '[', ';')):
                 continue
             key, value = line.split('=', 1)
@@ -393,7 +469,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(shlex.split(unit['ExecStop'][0]),
                          ['/usr/bin/docker', 'compose', '-f', 'docker-compose.yaml', 'down'])
         self.assertEqual(unit['Type'], ['oneshot'])
-        self.assertEqual(unit['RemainAfterExit'], ['yes'])
+        self.assertEqual(unit['RemainAfterExit'], ['no'])
         self.assertEqual(unit['TimeoutStartSec'], ['0'])
         self.assertEqual(unit['TimeoutStopSec'], ['120'])
         self.assertFalse((ROOT / 'run_watchtower_once.py').exists())

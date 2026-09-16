@@ -1,8 +1,9 @@
 alias: Watchtower - manual update example
 description: >-
-  Wake the example host, wait for stable readiness, request a manual
-  Watchtower update, and shut down only after a JSON success report.
-  Wake failure, update failure, or missing report leaves the host powered on.
+  Wake the example host, wait for stable readiness, request a manual Watchtower
+  update, then wait for one JSON report from that host on the shared result topic.
+  The automation reads status from the received payload itself. Wake failure,
+  update failure, unknown status, or missing report leaves the host powered on.
 triggers:
   - trigger: time
     at: "17:30:00"
@@ -81,23 +82,19 @@ actions:
       qos: 1
       retain: false
 
-  - alias: Wait for a JSON update outcome
+  - alias: Wait for one JSON result from this host
     wait_for_trigger:
       - trigger: mqtt
-        id: success
-        topic: homeassistant/watchtower/example-host/status
-        payload: "success"
-        value_template: "{{ value_json.status | default('unknown') | string | trim | lower }}"
-      - trigger: mqtt
-        id: failure
-        topic: homeassistant/watchtower/example-host/status
-        payload: "failure"
-        value_template: "{{ value_json.status | default('unknown') | string | trim | lower }}"
+        id: result
+        topic: homeassistant/watchtower/status
+        payload: "example-host"
+        value_template: >-
+          {{ value_json.host | default('') | string | trim }}
     timeout:
       minutes: 30
     continue_on_timeout: true
 
-  - alias: Stop without shutdown when no outcome arrived
+  - alias: Stop without shutdown when no matching report arrived
     if:
       - condition: template
         value_template: "{{ not wait.completed }}"
@@ -107,37 +104,44 @@ actions:
         data:
           title: Example host Watchtower TIMEOUT
           message: >-
-            No valid Watchtower outcome arrived within 30 minutes.
+            No matching Watchtower report arrived within 30 minutes.
             The update may still be running. The machine will stay on.
       - action: persistent_notification.create
         continue_on_error: true
         data:
           title: Example host Watchtower TIMEOUT
-          message: No confirmed outcome. No shutdown was requested; the machine stays on.
+          message: No confirmed result. No shutdown was requested; the machine stays on.
       - stop: Report timeout; leave the machine on.
 
-  - alias: Stop without shutdown on an unsuccessful result
+  - alias: Stop without shutdown unless the received JSON says success
     if:
       - condition: template
-        value_template: "{{ wait.trigger.id != 'success' }}"
+        value_template: >-
+          {{ wait.trigger.payload_json.status | default('unknown') | string | trim | lower != 'success' }}
     then:
       - action: notify.pushover
         continue_on_error: true
         data:
-          title: Example host Watchtower FAILED
+          title: Example host Watchtower NOT SUCCESSFUL
           message: >-
-            Watchtower reported failure. The machine will stay on.
+            Watchtower status was
+            {{ wait.trigger.payload_json.status | default('unknown') | string | trim | lower }}.
+            The machine will stay on.
             Error: {{ wait.trigger.payload_json.error | default('See the service log') }}
       - action: persistent_notification.create
         continue_on_error: true
         data:
-          title: Example host Watchtower FAILED
-          message: Watchtower reported failure. No shutdown was requested; the machine stays on.
-      - stop: Update failed; leave the machine on.
+          title: Example host Watchtower NOT SUCCESSFUL
+          message: >-
+            The received result was not success. No shutdown was requested;
+            the machine stays on.
+      - stop: Update was not successful; leave the machine on.
 
   - alias: Final success guard before either shutdown action
     condition: template
-    value_template: "{{ wait.completed and wait.trigger.id == 'success' }}"
+    value_template: >-
+      {{ wait.completed and
+         wait.trigger.payload_json.status | default('unknown') | string | trim | lower == 'success' }}
   - action: notify.pushover
     continue_on_error: true
     data:
@@ -155,5 +159,4 @@ actions:
       qos: 1
       retain: false
   - action: script.example_host_shutdown_ping_check_loop
-mode: single
-max_exceeded: silent
+mode: restart

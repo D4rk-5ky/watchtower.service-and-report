@@ -1,12 +1,12 @@
 [Unit]
-Description=Watchtower one-shot update and MQTT result report
+Description=Watchtower one-shot update and optional result reporting
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
+RemainAfterExit=no
 
 # Edit this to the directory containing the dedicated Watchtower Compose file.
 WorkingDirectory=/opt/watchtower
@@ -21,12 +21,13 @@ ExecStartPre=-/usr/bin/docker compose -f docker-compose.yaml pull watchtower
 # unsuccessful Watchtower exits. ExecStartPost becomes the final success/failure gate.
 ExecStart=-/usr/bin/docker compose -f docker-compose.yaml up --abort-on-container-exit --exit-code-from watchtower watchtower
 
-# Read the completed container exit status and JSON logs, then publish exactly
-# one MQTT JSON success/failure report. Change only the config filename to use
+# Read the completed container exit status and JSON logs, then report the
+# verified success/failure through whichever MQTT/mail channels are enabled. Change only the config filename to use
 # the SMTP example instead of the sendmail example.
 ExecStartPost=/usr/bin/python3 /opt/mqtt-power-action/mqtt_power_action_none.py -c /opt/mqtt-power-action/configs/config-sendmail-none.example.ini --watchtower-compose /opt/watchtower/docker-compose.yaml --watchtower-service watchtower
 
-# Tear down this dedicated Compose project when the unit is stopped/restarted.
+# Tear down this dedicated Compose project when the oneshot transitions to
+# stopped after reporting, and also on an explicit stop.
 ExecStop=/usr/bin/docker compose -f docker-compose.yaml down
 
 TimeoutStartSec=0

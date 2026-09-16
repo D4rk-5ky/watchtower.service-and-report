@@ -16,6 +16,46 @@ filesystems cannot also maintain a separate `versioning.md`).
   Exclude bytecode, caches, build output, and temporary files. Verify the archive
   against the supplied file inventory, accounting for authorized moves/removals.
 
+## 0.0.13 — 2026-09-16
+
+- Change `HomeAssistant/watchtower-manual-update.yaml` from `mode: single` to `mode: restart` so a new manual invocation replaces a still-running previous invocation instead of being rejected. Remove the now-unneeded `max_exceeded: silent` setting.
+- Move the packaged systemd unit from the project root to `systemd/watchtower.service`. Update installation instructions, config comments, tests, verification, and manifest paths while keeping the installed unit name `/etc/systemd/system/watchtower.service` unchanged.
+- Remove both Syncerate-related Home Assistant reference YAMLs from the release: `HomeAssistant/syncerate-all-servers.yaml` and the chained Syncerate example `HomeAssistant/home-assistant-automation.yaml`. They were reference material for creating/processing MQTT messages and are not part of the Watchtower project.
+- Replace the removed reference-consumer regression with release-layout checks that verify the service subfolder, absence of a root duplicate, and absence of the excluded Syncerate reference YAMLs.
+- Preserve the systemd pull → run/wait → post-report → teardown flow, shared-topic Watchtower JSON handling, optional MQTT/mail behavior, strict Watchtower result verification, redacted examples, and all other required project files.
+
+## 0.0.12 — 2026-09-16
+
+- Make script-level MQTT and mail independent optional features. Add `mqtt.enabled` and `mail.enabled` master switches to both complete config examples.
+- Preserve backward compatibility: an existing `[mqtt]` or `[mail]` section without the new `enabled` option remains enabled, while omitting the whole optional section disables that feature.
+- When MQTT is disabled, skip broker/topic/QoS/custom-message validation and publishing entirely. `paho-mqtt` is no longer a hard import-time dependency; it is required only when MQTT is enabled.
+- When mail is disabled, skip all mail backend/recipient/SMTP/sendmail validation and delivery. Disabled mail cannot trigger `continue_on_mail_fail` or make a run fail.
+- Keep disabled channels neutral in both ordinary mode and Watchtower `ExecStartPost`. A verified successful Watchtower job succeeds even when both notification channels are disabled; a failed/unverifiable Watchtower job still fails systemd even with no external notification transport.
+- Keep mail-only reporting useful and independent from MQTT configuration: email includes the automatic result JSON while showing MQTT as disabled, and unused MQTT custom templates do not affect mail-only mode.
+- Change example/default mail subjects to generic report wording so mail-only mode does not falsely claim that MQTT was sent.
+- Expand both full INI examples from 41 to 43 active options, with comments explaining the new switches and omitted-section behavior.
+- Add regressions for MQTT-only, mail-only, both-disabled, omitted optional sections, missing Paho with MQTT disabled, ignored disabled-feature settings, and Watchtower result behavior with no output channels. The offline suite is now 43 tests.
+- Preserve the systemd pull → run/wait → post-report → teardown flow, strict Watchtower result verification, Home Assistant shared-topic behavior when MQTT is enabled, privacy redaction, all previous project files, and clean packaging rules.
+
+## 0.0.11 — 2026-09-16
+
+- Replace the Home Assistant success/failure wait pair with one MQTT result trigger. The Watchtower automation now receives one matching report and reads `payload_json.status` itself to decide success, failure, or unknown.
+- Change the supplied Watchtower result topic to one shared example topic, `homeassistant/watchtower/status`, in both complete 41-option INI examples and the HA examples. Multiple hosts can publish to this one topic because automatic JSON already includes the reporting `host`.
+- Keep host safety/correlation in the manual Watchtower flow: its single wait trigger filters the shared result topic by the expected JSON `host`, so a report from another machine cannot authorize that host's shutdown.
+- Rewrite the generic all-servers consumer to use one MQTT trigger for every host, normalize JSON `status`, and optionally branch by JSON `host` for different follow-up actions without adding host-specific subscriptions.
+- Update the chained-job HA example to use one shared sync-result topic and payload `job` to distinguish job A from job B instead of separate result topics; replace old machine-specific example command payloads with neutral `start_example_*` placeholders.
+- Preserve the systemd-owned Watchtower lifecycle, strict completed-job verification, MQTT report format, Python code, mail behavior, power safety gates, `RemainAfterExit=no`, and all prior required project files.
+- Update README current usage, the complete command/code map, offline regression tests, verification report, manifest, privacy checks, and clean release archive.
+
+## 0.0.10 — 2026-09-16
+
+- Change `watchtower.service` from `RemainAfterExit=yes` to `RemainAfterExit=no` so a completed one-shot no longer stays `active (exited)`.
+- Preserve the existing systemd-owned order exactly: `ExecStartPre` pulls, `ExecStart` runs/waits, and `ExecStartPost` inspects the completed Watchtower job and publishes MQTT success/failure before cleanup.
+- Keep the existing `ExecStop=docker compose down`. With the non-remaining oneshot, the completed service proceeds into its stop phase after reporting, so the dedicated Compose project is torn down and a successful run finishes inactive/stopped.
+- Repeat/manual test runs can therefore use `systemctl start watchtower.service` again instead of requiring `restart` solely to clear an `active (exited)` state.
+- Preserve Python application behavior, both 41-option config examples, Home Assistant automations, reporting safety gates, redaction, and all prior project files.
+- Update README current usage, the complete command/code map, service regression expectation, verification report, manifest, and clean release archive.
+
 ## 0.0.9 — 2026-09-16
 
 - Restore the requested systemd-owned Watchtower flow instead of letting the Python reporter run the update itself: `ExecStartPre` pulls Watchtower, `ExecStart` runs/waits for the one-shot Compose service, and `ExecStartPost` reads the completed result and publishes MQTT success/failure.

@@ -114,6 +114,30 @@ class WatchtowerReportTests(unittest.TestCase):
             publish.assert_called_once()
             self.assertEqual(cfg.watchtower_report['status'], 'failure')
 
+    def test_watchtower_both_output_channels_can_be_disabled(self):
+        """Verified job status still controls systemd when MQTT and mail are both disabled."""
+        self.cfg.set('mqtt', 'enabled', 'false')
+        self.cfg.set('mail', 'enabled', 'false')
+        self.app.mqtt = None
+        ps = types.SimpleNamespace(returncode=0, stdout=json.dumps({'Service': 'watchtower', 'ExitCode': 0}))
+        success_logs = types.SimpleNamespace(returncode=0, stdout=json.dumps(self.session))
+        with patch.object(self.app.subprocess, 'run', side_effect=[ps, success_logs]), \
+             patch.object(self.app, 'make_mqtt_client') as client, \
+             patch.object(self.app, 'send_mail') as mail, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.app.report_watchtower(self.cfg, '/opt/watchtower/docker-compose.yaml'), 0)
+        client.assert_not_called()
+        mail.assert_not_called()
+
+        failed_logs = types.SimpleNamespace(returncode=0, stdout=json.dumps(self.session | {'Failed': 1}))
+        with patch.object(self.app.subprocess, 'run', side_effect=[ps, failed_logs]), \
+             patch.object(self.app, 'make_mqtt_client') as client, \
+             patch.object(self.app, 'send_mail') as mail, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.app.report_watchtower(self.cfg, '/opt/watchtower/docker-compose.yaml'), 1)
+        client.assert_not_called()
+        mail.assert_not_called()
+
     def test_reporting_failure_does_not_turn_job_into_success(self):
         ps = types.SimpleNamespace(returncode=0, stdout=json.dumps({'Service': 'watchtower', 'ExitCode': 0}))
         logs = types.SimpleNamespace(returncode=0, stdout=json.dumps(self.session))
@@ -147,24 +171,12 @@ class WatchtowerReportTests(unittest.TestCase):
         self.assertEqual(args.watchtower_compose, '/compose')
         self.assertEqual(args.watchtower_service, 'updater')
 
-    @unittest.skipIf(yaml is None, 'Install PyYAML and Jinja2 for consumer template checks')
-    def test_generic_consumer_understands_success_and_failure(self):
-        consumer = yaml.safe_load((ROOT / 'HomeAssistant/syncerate-all-servers.yaml').read_text(encoding='utf-8'))
-        env = Environment(undefined=StrictUndefined)
-        env.filters['bool'] = lambda value: str(value).strip().lower() in ('true', '1', 'yes', 'on')
-        self.assertEqual(consumer['triggers'][0]['options']['topic'], self.cfg.get('mqtt', 'topic'))
-        for failure in [False, True]:
-            records = [self.session | {'Failed': int(failure)}]
-            if failure:
-                records.insert(0, {'level': 'info',
-                                   'msg': 'Unable to update container "/example-app": pull failed. Proceeding to next.'})
-            wire = self.report(records)
-            context = {'trigger': {'payload_json': wire}}
-            for key, template in consumer['actions'][0]['variables'].items():
-                context[key] = env.from_string(template).render(**context).strip()
-            self.assertEqual(context['mqtt_status'], 'failure' if failure else 'success')
-            branch = consumer['actions'][1]['choose'][int(failure)]
-            self.assertEqual(env.from_string(branch['conditions'][0]['value_template']).render(**context), 'True')
+    def test_release_layout_excludes_reference_consumer(self):
+        """Only the Watchtower HA example ships; Syncerate reference YAMLs are excluded."""
+        self.assertTrue((ROOT / 'systemd/watchtower.service').is_file())
+        self.assertFalse((ROOT / 'watchtower.service').exists())
+        self.assertFalse((ROOT / 'HomeAssistant/syncerate-all-servers.yaml').exists())
+        self.assertFalse((ROOT / 'HomeAssistant/home-assistant-automation.yaml').exists())
 
 
 @unittest.skipIf(yaml is None, 'Install PyYAML and Jinja2 to run YAML flow checks')
@@ -215,7 +227,7 @@ class AutomationTests(unittest.TestCase):
             with self.subTest(ready=ready, completed=completed, outcome=outcome):
                 actions = []
                 variables = {'wait': {'completed': completed,
-                                      'trigger': {'id': outcome} if completed else None}}
+                                      'trigger': {'payload_json': {'status': outcome}} if completed else None}}
                 self.walk_actions(self.flow['actions'][1:], ready, variables, actions)
                 self.assertEqual(('mqtt.publish', 'shutdown') in actions, shutdown)
                 self.assertEqual(any(name.startswith('script.') for name, _ in actions), shutdown)
@@ -225,14 +237,17 @@ class AutomationTests(unittest.TestCase):
         wait = next(step for step in self.flow['actions'] if 'wait_for_trigger' in step)
         self.assertEqual(wait['timeout'], {'minutes': 30})
         self.assertIs(wait['continue_on_timeout'], True)
-        for trigger in wait['wait_for_trigger']:
-            self.assertEqual(trigger['topic'], 'homeassistant/watchtower/example-host/status')
-            self.assertEqual(trigger['payload'], trigger['id'])
-            template = self.templates.from_string(trigger['value_template'])
-            for payload, expected in [({'status': ' SUCCESS '}, 'success'),
-                                      ({'status': 'failure'}, 'failure'),
-                                      ({}, 'unknown')]:
-                self.assertEqual(template.render(value_json=payload), expected)
+        self.assertEqual(len(wait['wait_for_trigger']), 1)
+        trigger = wait['wait_for_trigger'][0]
+        self.assertEqual(trigger['topic'], 'homeassistant/watchtower/status')
+        self.assertEqual(trigger['id'], 'result')
+        self.assertEqual(trigger['payload'], 'example-host')
+        template = self.templates.from_string(trigger['value_template'])
+        for payload, expected in [({'host': 'example-host', 'status': 'success'}, 'example-host'),
+                                  ({'host': ' example-host ', 'status': 'failure'}, 'example-host'),
+                                  ({'host': 'other-host', 'status': 'success'}, 'other-host'),
+                                  ({}, '')]:
+            self.assertEqual(template.render(value_json=payload), expected)
 
         text = json.dumps(self.flow)
         self.assertNotRegex(text, r'\b(?:10|192\.168|172\.(?:1[6-9]|2[0-9]|3[01]))\.')
@@ -242,7 +257,7 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(self.flow['triggers'], [{'trigger': 'time', 'at': '17:30:00', 'enabled': False}])
         self.assertEqual(self.flow['conditions'], [{'condition': 'time', 'weekday': ['sun']}])
         self.assertIn('repeat.index >= 40', json.dumps(self.flow))
-        self.assertEqual(self.flow['mode'], 'single')
+        self.assertEqual(self.flow['mode'], 'restart')
         repeat = self.flow['actions'][0]['then'][0]['repeat']
         self.assertEqual(repeat['sequence'][-1], {'delay': {'seconds': 15}})
         self.assertEqual(repeat['until'][0]['conditions'][0]['for'], {'minutes': 4})
