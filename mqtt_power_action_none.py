@@ -19,6 +19,7 @@ import threading
 import time
 from email.message import EmailMessage
 import json
+import re
 
 try:
     import paho.mqtt.client as mqtt
@@ -230,6 +231,10 @@ def encode_mqtt_report(report) -> str:
 # Build an automation-compatible report, retaining the original event/host fields.
 # Report values describe the caller's job; they do not predict later mail/power results.
 def build_mqtt_message(config) -> str:
+    # Watchtower report mode supplies a checked completed-job outcome in memory, shared by MQTT and mail.
+    if hasattr(config, 'watchtower_report'):
+        return encode_mqtt_report(config.watchtower_report)
+
     hostname = get_config_hostname(config)
     action = get_str(config, "power", "action", required=True)
     event = get_event_name_for_action(action)
@@ -714,6 +719,210 @@ def run_power_action(config):
     subprocess.run(command, check=True)
 
 
+def redact_watchtower_text(text, config):
+    """Remove known mail/MQTT secrets and URL credentials before forwarding diagnostics."""
+    text = str(text)
+    secrets = [os.environ.get('WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PASSWORD', '')]
+    for section in ('mqtt', 'smtp'):
+        secrets.append(get_password(get_str(config, section, 'password', default=''),
+                                    get_str(config, section, 'password_env', default='')))
+    for secret in sorted({s for s in secrets if s}, key=len, reverse=True):
+        text = text.replace(secret, '[redacted]')
+    text = re.sub(r'(\w+://)[^\s/@]+:[^\s/@]+@', r'\1[redacted]@', text)
+    return re.sub(r'(?i)(password[=:]\s*)[^\s,;]+', r'\1[redacted]', text)
+
+
+def inspect_watchtower_output(output, returncode, config):
+    """Restore the strict session check and extract explicit container failures, without guessing names."""
+    sessions, errors, failed_containers = [], [], []
+    warning = False
+    for line in output.splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue  # Compose progress is plain text; absence of a session still fails.
+        if not isinstance(record, dict):
+            continue
+        message = str(record.get('msg', ''))
+        level = str(record.get('level', '')).lower()
+        warning = warning or level in ('warning', 'warn')
+        if message == 'Session done':
+            sessions.append(record)
+        # Watchtower logs failed image checks at INFO rather than ERROR.
+        match = re.match(r'^Unable to update container "([^"\r\n]+)": (.*)', message)
+        if level in ('error', 'fatal', 'panic') or match:
+            detail = message
+            if record.get('error'):
+                detail += ': ' + str(record['error'])
+            detail = redact_watchtower_text(detail, config)
+            errors.append(detail)
+            name = match.group(1) if match else record.get('container')
+            if isinstance(name, str) and name:
+                entry = {'name': redact_watchtower_text(name, config), 'error': detail}
+                for field in ('container_id', 'image'):
+                    if isinstance(record.get(field), str):
+                        entry[field] = redact_watchtower_text(record[field], config)
+                if entry not in failed_containers:
+                    failed_containers.append(entry)
+
+    session = sessions[0] if len(sessions) == 1 else {}
+    valid = bool(session) and all(type(session.get(k)) is int and session[k] >= 0
+                                  for k in ('Scanned', 'Updated', 'Failed'))
+    valid = valid and session['Updated'] <= session['Scanned']
+    reasons = []
+    if returncode != 0:
+        reasons.append(f'Compose/Watchtower exited with code {returncode}')
+    if not valid:
+        reasons.append('Missing, duplicate or invalid completed-session summary')
+    elif session['Failed']:
+        reasons.append(f"Watchtower reported {session['Failed']} failed container update(s)")
+    if errors:
+        reasons.append('Watchtower logged an error or an unsuccessful container update')
+    if failed_containers:
+        reasons.append('Containers: ' + ', '.join(dict.fromkeys(x['name'] for x in failed_containers)))
+    elif reasons:
+        reasons.append('Failed container names unavailable in output')
+
+    failed = bool(reasons)
+    title = get_str(config, 'report', 'title', default='auto')
+    if not title or title.lower() == 'auto':
+        title = get_config_hostname(config) + ': Watchtower update'
+    else:
+        title = render_template(title, config)
+    error = '; '.join(reasons)
+    diagnostic = '\n'.join(errors) if errors else (output.strip() if failed else '')
+    diagnostic = redact_watchtower_text(diagnostic, config)
+    # Keep the existing HA/Pushover text fields short; complete logs remain in the journal.
+    report = {
+        'status': 'failure' if failed else 'success',
+        'title': redact_watchtower_text(title, config)[:120],
+        'exit_code': (returncode or 1) if failed else 0,
+        'warning': warning,
+        'error': error[:240], 'stderr': diagnostic[:500] if errors else diagnostic[-500:],
+        'event': 'watchtower_completed', 'host': get_config_hostname(config),
+        'compose_exit_code': returncode,
+        'scanned': session['Scanned'] if valid else None,
+        'updated': session['Updated'] if valid else None,
+        'failed': session['Failed'] if valid else None,
+        'failed_containers': [{k: v[:400] for k, v in c.items()} for c in failed_containers[:20]],
+        'details_truncated': len(error) > 240 or len(diagnostic) > 500 or
+                             len(failed_containers) > 20 or
+                             any(len(v) > 400 for c in failed_containers for v in c.values()),
+    }
+    return report
+
+
+def parse_compose_exit_code(output, service):
+    """Return the completed Compose service exit code from `docker compose ps --format json`."""
+    text = (output or '').strip()
+    if not text:
+        return None
+
+    records = []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            records.extend(item for item in parsed if isinstance(item, dict))
+        elif isinstance(parsed, dict):
+            records.append(parsed)
+    except ValueError:
+        # Some Compose versions emit one JSON object per line instead of one array.
+        for line in text.splitlines():
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(item, dict):
+                records.append(item)
+
+    matching = [record for record in records if record.get('Service') == service]
+    if not matching and len(records) == 1:
+        matching = records
+    if len(matching) != 1:
+        return None
+
+    value = matching[0].get('ExitCode')
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and re.fullmatch(r'-?\d+', value.strip()):
+        return int(value.strip())
+    return None
+
+
+def report_watchtower(config, compose_file, service='watchtower'):
+    """Inspect the completed systemd-owned Compose job and publish exactly one outcome report."""
+    if get_str(config, 'power', 'action', required=True) != 'none':
+        config_error('Watchtower report mode requires [power] action = none; Home Assistant owns shutdown')
+    if get_str(config, 'mqtt', 'message', default='auto').lower() not in ('', 'auto'):
+        config_error('Watchtower report mode requires [mqtt] message = auto')
+    if get_bool(config, 'mqtt', 'retain', default=False):
+        config_error('Watchtower report mode requires [mqtt] retain = false')
+    if not service or service.startswith('-'):
+        config_error('Watchtower Compose service must be nonempty and not start with a dash')
+
+    # systemd already ran and waited for Compose. This post-start phase only reads
+    # the completed container status and logs; it never starts, pulls, or restarts it.
+    ps_command = ['/usr/bin/docker', 'compose', '-f', compose_file,
+                  'ps', '-a', '--format', 'json', service]
+    logs_command = ['/usr/bin/docker', 'compose', '-f', compose_file,
+                    'logs', '--no-color', '--no-log-prefix', service]
+
+    ps_output = ''
+    ps_rc = 1
+    try:
+        ps_result = subprocess.run(ps_command, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True, encoding='utf-8', errors='replace')
+        ps_output, ps_rc = ps_result.stdout or '', ps_result.returncode
+    except OSError as error:
+        ps_output = f'Could not inspect Docker Compose service status: {error}'
+
+    compose_exit_code = parse_compose_exit_code(ps_output, service) if ps_rc == 0 else None
+    if compose_exit_code is None:
+        compose_exit_code = ps_rc if ps_rc != 0 else 1
+
+    log_output = ''
+    logs_rc = 1
+    try:
+        logs_result = subprocess.run(logs_command, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     text=True, encoding='utf-8', errors='replace')
+        log_output, logs_rc = logs_result.stdout or '', logs_result.returncode
+    except OSError as error:
+        log_output = f'Could not read Docker Compose service logs: {error}'
+
+    # If log retrieval itself fails, make the completed job unverifiable even if
+    # Compose reported exit 0. Include inspection diagnostics in the bounded report.
+    output = log_output
+    if logs_rc != 0:
+        output = (log_output + '\n' + ps_output).strip()
+        if compose_exit_code == 0:
+            compose_exit_code = logs_rc or 1
+
+    print(redact_watchtower_text(output, config), flush=True)
+    report = inspect_watchtower_output(output, compose_exit_code, config)
+    config.watchtower_report = report
+
+    try:
+        mqtt_ok, details = publish_mqtt(config)
+    except Exception as error:
+        mqtt_ok, details = False, f'MQTT reporting failed: {error}'
+    print(redact_watchtower_text(details, config), flush=True)
+
+    mail_type = 'failure' if report['status'] == 'failure' or not mqtt_ok else 'success'
+    mail_ok = True
+    if get_bool(config, 'mail', 'on_' + mail_type, default=False):
+        try:
+            mail_ok = send_mail(config, mail_type, details)
+        except Exception as error:
+            mail_ok = False
+            print(redact_watchtower_text(f'Mail reporting failed: {error}', config))
+
+    # ExecStartPost returns failure when the update/report was unsuccessful so
+    # systemd still exposes a failed unit even though ExecStart is prefixed with '-'.
+    return 0 if report['status'] == 'success' and mqtt_ok and mail_ok else 1
+
+
 # Parse command-line arguments.
 # The config file path is required so the script knows what settings to use.
 def parse_args():
@@ -730,6 +939,8 @@ def parse_args():
         help="Path to config file.",
     )
 
+    parser.add_argument('--watchtower-compose', metavar='FILE', help='Inspect the completed Watchtower Compose job at FILE and publish its verified outcome; this does not start Docker.')
+    parser.add_argument('--watchtower-service', default='watchtower', help='Compose service name for Watchtower mode (default: watchtower).')
     return parser.parse_args()
 
 
@@ -745,6 +956,8 @@ def main():
     args = parse_args()
     # Load and validate config before doing any external actions.
     config = load_config(args.config)
+    if getattr(args, 'watchtower_compose', None):
+        sys.exit(report_watchtower(config, args.watchtower_compose, args.watchtower_service))
 
     mail_on_success = get_bool(config, "mail", "on_success", default=False)
     mail_on_failure = get_bool(config, "mail", "on_failure", default=False)

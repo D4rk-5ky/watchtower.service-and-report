@@ -1,0 +1,106 @@
+alias: MQTT JSON status - generic examples
+description: >-
+  Generic example consumer for JSON success, failure, or unknown reports. Replace
+  the example topics and optional follow-up action with your own Home Assistant entities.
+triggers:
+  - trigger: mqtt
+    id: Watchtower Example
+    options:
+      topic: homeassistant/watchtower/example-host/status
+  - trigger: mqtt
+    id: Example Sync Job
+    options:
+      topic: homeassistant/sync/example-job/status
+  - trigger: mqtt
+    id: Example Sync Job With Shutdown
+    options:
+      topic: homeassistant/sync/example-job-with-shutdown/status
+conditions: []
+actions:
+  - variables:
+      mqtt_status: |-
+        {% if trigger.payload_json is defined %}
+          {{ trigger.payload_json.status | default('unknown') | string | trim | lower }}
+        {% else %}
+          unknown
+        {% endif %}
+      report_title: |-
+        {% if trigger.payload_json is defined %}
+          {{ trigger.payload_json.title
+             | default(trigger.payload_json.name
+             | default(trigger.payload_json.job | default('MQTT job'))) }}
+        {% else %}
+          MQTT job
+        {% endif %}
+      report_exit_code: |-
+        {% if trigger.payload_json is defined %}
+          {{ trigger.payload_json.exit_code | default('unknown') }}
+        {% else %}
+          unknown
+        {% endif %}
+      report_error: |-
+        {% if trigger.payload_json is defined %}
+          {{ trigger.payload_json.error | default('No error message') }}
+        {% else %}
+          No valid JSON error message
+        {% endif %}
+      report_stderr: |-
+        {% if trigger.payload_json is defined %}
+          {{ trigger.payload_json.stderr | default('No stderr captured') }}
+        {% else %}
+          No valid JSON stderr captured
+        {% endif %}
+      report_warning: |-
+        {% if trigger.payload_json is defined %}
+          {{ trigger.payload_json.warning | default(false) | bool }}
+        {% else %}
+          false
+        {% endif %}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ mqtt_status == 'success' }}"
+        sequence:
+          - action: notify.pushover
+            continue_on_error: true
+            data:
+              title: "✅ Job completed successfully"
+              message: >-
+                {{ report_title }} finished successfully.
+                Exit code: {{ report_exit_code }}
+                {% if report_warning | bool %}Warning: non-fatal warnings were reported.{% endif %}
+          - choose:
+              - conditions:
+                  - condition: trigger
+                    id: Example Sync Job With Shutdown
+                sequence:
+                  - action: mqtt.publish
+                    data:
+                      topic: homeassistant/mqtt-listener/example-host
+                      payload: shutdown_delay
+                      qos: 0
+                      retain: false
+      - conditions:
+          - condition: template
+            value_template: "{{ mqtt_status == 'failure' }}"
+        sequence:
+          - action: notify.pushover
+            continue_on_error: true
+            data:
+              title: "❌ Job failed"
+              message: |-
+                {{ report_title }} failed.
+                Exit code: {{ report_exit_code }}
+                Error: {{ report_error }}
+                Last stderr/output: {{ report_stderr }}
+    default:
+      - action: notify.pushover
+        continue_on_error: true
+        data:
+          title: "❔ Job status unknown"
+          message: >-
+            Received an MQTT status that was neither success nor failure.
+            Title: {{ report_title }} Trigger: {{ trigger.id }} Topic: {{ trigger.topic }}
+            Raw payload: {{ trigger.payload | default('No payload') }}
+mode: parallel
+max: 10

@@ -1,0 +1,30 @@
+# Example dedicated Watchtower Compose stack.
+# Copy it to your own Watchtower directory and replace all placeholders.
+# Keep JSON/info logging enabled: ExecStartPost parses the completed Watchtower
+# session summary from these logs before publishing success/failure over MQTT.
+services:
+  watchtower:
+    container_name: watchtower
+    image: containrrr/watchtower:latest
+    pull_policy: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_RUN_ONCE: "true"
+      WATCHTOWER_LOG_FORMAT: json
+      WATCHTOWER_LOG_LEVEL: info
+      TZ: Etc/UTC
+
+      # Optional Watchtower-native email notification settings.
+      # Remove these lines if Watchtower itself should not send email.
+      WATCHTOWER_NOTIFICATION_EMAIL_FROM: sender@example.com
+      WATCHTOWER_NOTIFICATION_EMAIL_TO: receiver@example.com
+      WATCHTOWER_NOTIFICATION_EMAIL_SERVER: smtp.example.com
+      WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PORT: "587"
+      WATCHTOWER_NOTIFICATION_EMAIL_SERVER_USER: sender@example.com
+      WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PASSWORD: "${WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PASSWORD:?Set the SMTP password in the external Compose .env file}"
+      WATCHTOWER_NOTIFICATION_EMAIL_DELAY: "30"
+      WATCHTOWER_NOTIFICATIONS: email
+      WATCHTOWER_NOTIFICATIONS_LEVEL: info
+      WATCHTOWER_NO_STARTUP_MESSAGE: "true"

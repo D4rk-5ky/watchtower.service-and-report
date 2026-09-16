@@ -1,67 +1,51 @@
-# Verification — 0.0.4
+# Verification — 0.0.9
 
-Checked on 2026-09-15 using Python 3.12.14 on Windows.
+Verification was performed on the packaged source tree without contacting a real MQTT broker, SMTP server, Docker daemon, Home Assistant instance, or issuing a real host power command.
 
-## Passed
+## Completed checks
 
-- All 23 shipped offline tests pass. Existing JSON and power-safety tests remain;
-  new tests exercise both relocated INIs, their commented JSON templates, local
-  sendmail routing, SMTP STARTTLS command order, implicit TLS, environment-based
-  credentials, empty-password rejection, SMTP error aborts, and full simulated
-  MQTT/mail/delay/shutdown-dry-run order.
-- Both application and test Python files compile in memory. No bytecode is
-  written into the release. Application and service bytes match 0.0.3 exactly.
-- Both INIs contain exactly all 41 supported section/option pairs, derived from
-  the application syntax tree. Supplied SMTP values match after removing pasted
-  Markdown escapes; extra_body names the actual script and report options were
-  added. Placeholder credentials are not real credentials.
-- The sendmail INI and supplied Home Assistant automation are byte-exact moves
-  from 0.0.3. There are no original snapshots, old reference directory, or root INIs.
-- All 27 application functions and 25 test methods/helpers are documented in
-  commented_code_map.md. All config options and both setup paths are in README.
-  The requested disclaimer remains directly below the README title.
-- The real CLI still reports missing Paho and exits 1 on this machine. Help and
-  argument parsing pass with the suite's in-memory Paho stand-in.
-- Every previous package file is accounted for as retained, moved, or an explicitly
-  removed snapshot; the SMTP example is the only added project file.
+- `python3 -m unittest discover -s tests -v`
+  - Result: **37 tests passed**.
+  - Docker, MQTT, mail, and power operations are mocked.
+  - Covers ordinary JSON/report validation, MQTT/mail/power safety gates, both mail backends, systemd command wiring, completed-Watchtower result inspection, failure/success reporting, HA success/failure branching, and shutdown-only-after-success behavior.
+- `python3 -m py_compile mqtt_power_action_none.py tests/test_mqtt_reports.py tests/test_watchtower_flow.py`
+  - Result: **passed**.
+- YAML parsing with PyYAML for all three `HomeAssistant/*.yaml` files and `compose.example.yaml`.
+  - Result: **passed**.
+- INI parsing with `configparser` for both example configs.
+  - Result: **passed**; each example contains **41 active options**.
+- CLI help was executed with a temporary local Paho import stub because `paho-mqtt` is not installed in this build environment.
+  - `--help` displayed all four flags/forms: `-h/--help`, `-c/--config`, `--watchtower-compose`, and `--watchtower-service`.
+  - A missing config path exited with code **2** and a controlled `CONFIG ERROR`.
+- `systemd-analyze verify ./watchtower.service` was attempted.
+  - The checker reached the unit and reported environment/dependency errors because this build container does not have `docker.service` or `/usr/bin/docker`.
+  - No unit syntax error was reported before those missing-environment failures.
+- Static/unit tests verify the intended service phases exactly:
+  - `ExecStartPre`: `docker compose ... pull watchtower`
+  - `ExecStart`: `docker compose ... up --abort-on-container-exit --exit-code-from watchtower watchtower`
+  - `ExecStartPost`: Python completed-job reporter
+  - `ExecStop`: `docker compose ... down`
+- Privacy/redaction scan across the full project tree found no prior local/private IPs, host/device/account labels, personal MQTT topic names, or non-placeholder email addresses.
+- Final archive staging was checked for `__pycache__`, `.pyc`, `.pyo`, build cache, and temporary files before packaging.
+- Final file-path manifest was compared with the supplied 0.0.8 project: all required previous project files remain present; none were silently dropped.
 
-## Archive verification
+## What was not fully tested
 
-The final ZIP has exactly 12 files. Its path inventory, duplicate absence, CRC,
-file sizes and SHA-256 values are checked. The manifest accounts for the original
-three supplied filenames and every 0.0.3 path, including authorized snapshot
-removals and moves. It contains metadata only, not copies of old files. Its own
-size/hash are null to avoid circular hashing; the external ZIP checksum includes
-all archive bytes. No caches, bytecode, temporary files, or prior archives are
-included. Old release ZIPs remain separate from the current project release.
+- No real Watchtower container was run, so behavior against a live Docker/Compose/Watchtower installation remains to be confirmed on the target host.
+- No real `docker compose ps --format json` output was collected from the target Docker Compose version. The parser is covered against object, array, and line-delimited JSON shapes in tests.
+- No real MQTT broker, sendmail/Postfix installation, or SMTP provider was contacted.
+- No Home Assistant automation was imported/executed in a live Home Assistant instance; YAML and Jinja-relevant control-flow pieces are checked offline.
+- No real shutdown/reboot was performed.
+- Native `systemd-analyze verify` could not complete successfully in the build container solely because Docker/systemd Docker service dependencies are absent there. Run it again on the target host after editing paths.
 
-## Not fully tested
-
-- No live SMTP server/account or sendmail service was used. SMTP/TLS/login/send
-  behavior was checked with mocks, so real credentials, server acceptance,
-  certificate negotiation and recipient delivery still need live verification.
-- Paho is unavailable locally. Real broker connections, authentication, QoS,
-  retained-message handling and subscriber behavior were not tested.
-- No Home Assistant engine was run. Its supplied YAML is a regular automation,
-  not a parameterized blueprint; it was moved unchanged and was not installed.
-- No Docker/systemd operation, shutdown, or reboot was executed. The external
-  compose.yml and success.sh are still not supplied.
-
-## Reproduce offline checks
-
-From the extracted project directory:
+## Recommended target-host checks before enabling automation
 
 ```sh
-python3 -B -m unittest discover -s tests -v
-python3 -c "from pathlib import Path; p = Path('mqtt_power_action_none.py'); compile(p.read_bytes(), str(p), 'exec'); print('Syntax OK')"
+sudo systemd-analyze verify /etc/systemd/system/watchtower.service
+sudo systemctl daemon-reload
+sudo systemctl start watchtower.service
+sudo systemctl status watchtower.service
+sudo journalctl -u watchtower.service -n 100 --no-pager
 ```
 
-The first runs the included suite with bytecode disabled, discovers tests in
-tests/, and prints each result. The second checks syntax in memory without
-executing the application or importing Paho. The tests send no real mail/MQTT.
-
-The SMTP example intentionally retains shutdown + dry_run=true: normal use sends
-real MQTT/mail, waits 10 seconds, and prints the poweroff command. Dry-run does
-not suppress receiving automations. Keep both continuation flags false to abort
-the later power path after MQTT or success-mail failure. All pre-existing runtime
-limitations described in README remain; no runtime code changed in this release.
+Confirm that the Watchtower Compose service emits JSON logs with exactly one `Session done` record and that Home Assistant receives either `status: success` or `status: failure` on the configured result topic before enabling automatic shutdown actions.

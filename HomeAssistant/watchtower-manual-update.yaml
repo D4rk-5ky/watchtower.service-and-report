@@ -1,0 +1,159 @@
+alias: Watchtower - manual update example
+description: >-
+  Wake the example host, wait for stable readiness, request a manual
+  Watchtower update, and shut down only after a JSON success report.
+  Wake failure, update failure, or missing report leaves the host powered on.
+triggers:
+  - trigger: time
+    at: "17:30:00"
+    enabled: false
+conditions:
+  - condition: time
+    weekday:
+      - sun
+actions:
+  - alias: Wake and wait if the host has not been online for four minutes
+    if:
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.example_host_ready
+            state: "on"
+            for:
+              minutes: 4
+    then:
+      - repeat:
+          sequence:
+            - alias: Send wake command only while host is not online
+              if:
+                - condition: not
+                  conditions:
+                    - condition: state
+                      entity_id: binary_sensor.example_host_ready
+                      state: "on"
+              then:
+                - action: switch.turn_on
+                  target:
+                    entity_id: switch.example_host_power
+            - delay:
+                seconds: 15
+          until:
+            - condition: or
+              conditions:
+                - condition: state
+                  entity_id: binary_sensor.example_host_ready
+                  state: "on"
+                  for:
+                    minutes: 4
+                - condition: template
+                  value_template: "{{ repeat.index >= 40 }}"
+
+  - alias: Stop the entire automation if the host never became ready
+    if:
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.example_host_ready
+            state: "on"
+            for:
+              minutes: 4
+    then:
+      - action: notify.pushover
+        continue_on_error: true
+        data:
+          title: Example host Watchtower NOT STARTED
+          message: >-
+            The example host did not remain online for four minutes
+            within the wake-up window. No update or shutdown command was sent.
+      - action: persistent_notification.create
+        continue_on_error: true
+        data:
+          title: Example host Watchtower NOT STARTED
+          message: >-
+            Readiness was not confirmed. No update or shutdown command was sent.
+      - stop: Host was not ready; no update or shutdown requested.
+
+  - alias: Request the manual Watchtower update
+    action: mqtt.publish
+    data:
+      topic: homeassistant/mqtt-listener/example-host
+      payload: start_watchtower
+      qos: 1
+      retain: false
+
+  - alias: Wait for a JSON update outcome
+    wait_for_trigger:
+      - trigger: mqtt
+        id: success
+        topic: homeassistant/watchtower/example-host/status
+        payload: "success"
+        value_template: "{{ value_json.status | default('unknown') | string | trim | lower }}"
+      - trigger: mqtt
+        id: failure
+        topic: homeassistant/watchtower/example-host/status
+        payload: "failure"
+        value_template: "{{ value_json.status | default('unknown') | string | trim | lower }}"
+    timeout:
+      minutes: 30
+    continue_on_timeout: true
+
+  - alias: Stop without shutdown when no outcome arrived
+    if:
+      - condition: template
+        value_template: "{{ not wait.completed }}"
+    then:
+      - action: notify.pushover
+        continue_on_error: true
+        data:
+          title: Example host Watchtower TIMEOUT
+          message: >-
+            No valid Watchtower outcome arrived within 30 minutes.
+            The update may still be running. The machine will stay on.
+      - action: persistent_notification.create
+        continue_on_error: true
+        data:
+          title: Example host Watchtower TIMEOUT
+          message: No confirmed outcome. No shutdown was requested; the machine stays on.
+      - stop: Report timeout; leave the machine on.
+
+  - alias: Stop without shutdown on an unsuccessful result
+    if:
+      - condition: template
+        value_template: "{{ wait.trigger.id != 'success' }}"
+    then:
+      - action: notify.pushover
+        continue_on_error: true
+        data:
+          title: Example host Watchtower FAILED
+          message: >-
+            Watchtower reported failure. The machine will stay on.
+            Error: {{ wait.trigger.payload_json.error | default('See the service log') }}
+      - action: persistent_notification.create
+        continue_on_error: true
+        data:
+          title: Example host Watchtower FAILED
+          message: Watchtower reported failure. No shutdown was requested; the machine stays on.
+      - stop: Update failed; leave the machine on.
+
+  - alias: Final success guard before either shutdown action
+    condition: template
+    value_template: "{{ wait.completed and wait.trigger.id == 'success' }}"
+  - action: notify.pushover
+    continue_on_error: true
+    data:
+      title: Example host Watchtower Successful
+      message: Watchtower completed successfully. Requesting controlled shutdown of the example host.
+  - action: persistent_notification.create
+    continue_on_error: true
+    data:
+      title: Example host Watchtower Successful
+      message: Watchtower completed successfully. Requesting controlled shutdown of the example host.
+  - action: mqtt.publish
+    data:
+      topic: homeassistant/example-host/power
+      payload: shutdown
+      qos: 1
+      retain: false
+  - action: script.example_host_shutdown_ping_check_loop
+mode: single
+max_exceeded: silent

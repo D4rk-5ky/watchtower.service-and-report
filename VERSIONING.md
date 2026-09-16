@@ -16,6 +16,113 @@ filesystems cannot also maintain a separate `versioning.md`).
   Exclude bytecode, caches, build output, and temporary files. Verify the archive
   against the supplied file inventory, accounting for authorized moves/removals.
 
+## 0.0.9 — 2026-09-16
+
+- Restore the requested systemd-owned Watchtower flow instead of letting the Python reporter run the update itself: `ExecStartPre` pulls Watchtower, `ExecStart` runs/waits for the one-shot Compose service, and `ExecStartPost` reads the completed result and publishes MQTT success/failure.
+- Use systemd's leading `-` prefix on the pull/run phases so a non-zero Docker/Watchtower result does not skip `ExecStartPost`; the post reporter becomes the final unit success/failure gate.
+- Reuse the existing strict Watchtower JSON parser and MQTT/mail helpers. Add Compose `ps --format json` exit-code parsing and completed-job `logs --no-log-prefix` inspection; the reporter never starts/pulls/restarts Watchtower in report mode.
+- Keep strict success requirements: exit 0, exactly one valid `Session done`, valid non-negative counters, `Updated <= Scanned`, `Failed == 0`, and no Watchtower error/failed-update records. Unverifiable completion remains failure.
+- Require JSON/info Watchtower logging in the Compose example so the post-run parser can verify the finished session.
+- Preserve ordinary MQTT/mail/power behavior and its safety gates; Watchtower report mode still requires `power.action = none`, automatic JSON, and non-retained MQTT.
+- Redact identifying infrastructure details from all shipped examples/tests/docs: replace local IPs, host/device names, account labels, personal MQTT topics/entity IDs, and non-placeholder email values with generic example data.
+- Rewrite README for current behavior only, update the full code/command map, update verification/tests, and keep both 41-option INI examples complete.
+- Keep the same required project files, regenerate manifest/checksums, and package a clean archive without bytecode/cache/temp files.
+
+## 0.0.8 — 2026-09-16
+
+- Restore the strict Watchtower completion check inside mqtt_power_action_none.py,
+  with --watchtower-compose FILE and optional --watchtower-service NAME. Keep a
+  single runtime Python file and reuse existing MQTT, encoding, config and mail helpers.
+- Capture a foreground one-time Compose run with image pull and forced JSON/info
+  logging; report handled launch, pull, process, logged-update and unverifiable
+  completion failures as well as verified success. One final MQTT publish attempt.
+- Require exit zero, exactly one valid Session done, Failed zero, valid counters,
+  and no error/fatal/panic or INFO-level Unable to update container record.
+- Add dynamically computed compatible status/title/exit_code/warning/error/stderr
+  fields, summary counters, Compose exit code, bounded failed_containers details
+  and truncation flag. Redact known secrets/common credential patterns. Unknown
+  container names are explicitly unavailable, not inferred from adjacent log lines.
+- Require action none, message auto and retain false before Docker. No local
+  power action in checked mode; job failure cannot be hidden by continuation flags.
+  Ordinary reporter behavior remains unchanged. Runtime reports never rewrite INIs.
+- Select success/failure mail from job and MQTT outcomes in checked mode, using
+  existing sendmail/SMTP routing. No failure-to-success report retry.
+- Move the unit's work into one ExecStart of the existing Python script; remove
+  separate pull and success-only post hook so handled failures can publish too.
+  Preserve requested remain-active and Compose down-on-stop settings.
+- Add supplied all-servers HA consumer with one Watchtower result-topic trigger;
+  preserve all its original triggers/actions and the existing two automations.
+- Keep all 41 active INI settings unchanged, updating comments for checked mode.
+  Update README, full function/command map, regression tests, verification,
+  original/prior manifest accounting and clean ZIP.
+
+## 0.0.7 — 2026-09-16
+
+- Simplify the requested runtime to systemd, Docker Compose and the existing
+  mqtt_power_action_none.py with one directly named config file.
+- Remove run_watchtower_once.py and its runner-specific tests from this release
+  at the user's request to eliminate the extra layer; retain original necessary
+  files, both INIs, both HA automations and their regression tests.
+- Replace the runner with foreground Compose up --exit-code-from watchtower
+  watchtower; keep image pull first and run the reporter only after exit zero.
+- Restore requested RemainAfterExit=yes and ExecStop=compose down behavior.
+  Document restart for repeat jobs and dedicated-project scope of teardown.
+- Remove REPORT_CONFIG/WATCHTOWER_COMPOSE_FILE/EnvironmentFile indirection and
+  runner prechecks. Use explicit Compose filename and complete -c INI path.
+- Explicitly document the simplified success guarantee: Watchtower exit zero
+  may include individual update failures; no session/log verifier remains.
+- Keep reporter implementation and all active INI values unchanged. Update
+  config comments and Compose password instructions to use a local Compose .env.
+- Update README current usage, operational disclaimer risks, full function/command
+  map, tests, verification, original/prior-file manifest accounting and clean ZIP.
+
+## 0.0.6 — 2026-09-16
+
+- Replace detached Compose startup with run_watchtower_once.py: run the existing
+  Watchtower service as a foreground one-time job, wait for exit, and require a
+  complete JSON session with zero failures before success reporting. Reject
+  error-level logs and missing/invalid/duplicate session summaries even on exit 0.
+- Reuse the reporter's configuration functions. Preflight notification-only,
+  automatic, non-retained success reporting before Docker; leave the original
+  reporter implementation and its general-purpose power/mail safety behavior intact.
+- Use the supplied /opt/mycompose directory and docker-compose.yaml filename.
+  Keep reporter/config paths under /opt/mqtt-power-action.
+  Make the oneshot repeatable and remove Compose down so updated workloads stay up.
+- Add a cleaned Compose example from the supplied service; retain run-once,
+  cleanup, image, timezone and email settings, replacing the pasted app password
+  with a required environment variable. No actual credentials are packaged.
+- Add the Watchtower HA automation: one generic readiness sensor, bounded
+  wake attempts, four-minute stability and an explicit outer stop-if-not-ready.
+  Keep Sunday 17:30 disabled. Parse JSON success/failure, stop on failure/timeout,
+  and put both original shutdown actions behind a final success guard.
+- Preserve command/result/shutdown topics and the external shutdown script.
+  Retain the separate original backup automation unchanged.
+- Set both INIs to the Watchtower result topic and action none; update comments
+  while keeping all 41 options, dry-run, mail and MQTT failure defaults intact.
+- Update README current usage and top disclaimer's operational risks, complete
+  function/command map, offline regressions, verification, manifest and clean ZIP.
+
+## 0.0.5 — 2026-09-15
+
+- Integrate watchtower.service directly with the existing Python reporter at
+  /opt/mqtt-power-action/mqtt_power_action_none.py.
+- Replace the missing external success.sh reference with an absolute Python
+  ExecStartPost command. Keep report failures visible as activation failures.
+- Select exactly one of the two configs via REPORT_CONFIG; default to sendmail.
+  Document the SMTP alternative and optional configs/report.env password file.
+- Keep the external Compose stack separate. Use the user's requested placeholder
+  /location/for/wathctower/compose file through WATCHTOWER_COMPOSE_FILE, and its
+  parent directory as WorkingDirectory; apply -f consistently to pull/up/down.
+- Add readability prechecks for the script, selected INI and Compose file before
+  changing containers. No Python application behavior or config active values
+  changed; preserve original dry-run, failure gates, QoS, retain, and mail defaults.
+- Update both INI header comments, README installation paths/service commands and
+  risk description, commented code map, verification, manifest and archive hashes.
+- Add offline service-integration tests to map Linux install paths to the shipped
+  files and exercise the post-start report with both selected configs and mocked I/O.
+- Keep existing Compose lifecycle commands/options and service dependencies,
+  oneshot/remain-active behavior, and timeout settings. No Compose file is invented.
+
 ## 0.0.4 — 2026-09-15
 
 - Remove the bundled `originals/` snapshots as explicitly requested. Existing

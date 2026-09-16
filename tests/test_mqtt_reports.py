@@ -4,7 +4,8 @@ import configparser
 import contextlib
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import shlex
 import subprocess
 import sys
 import types
@@ -40,9 +41,9 @@ class ReportTests(unittest.TestCase):
     def test_default_report(self):
         """Automatic output is an object with exactly the documented typed fields."""
         report = json.loads(self.app.build_mqtt_message(self.cfg))
-        self.assertEqual(report, dict(status='success', title='proxmox: none',
+        self.assertEqual(report, dict(status='success', title='example-host: none',
                                      exit_code=0, warning=False, error='', stderr='',
-                                     event='success', host='proxmox'))
+                                     event='success', host='example-host'))
 
     def test_auto_without_report_section(self):
         """Automatic defaults work without maintaining an original config snapshot."""
@@ -51,7 +52,7 @@ class ReportTests(unittest.TestCase):
         report = json.loads(self.app.build_mqtt_message(cfg))
         self.assertEqual(report['status'], 'success')
         self.assertEqual(report['exit_code'], 0)
-        self.assertEqual(report['host'], 'proxmox')
+        self.assertEqual(report['host'], 'example-host')
 
     def test_status_independent_of_action(self):
         """Both job outcomes work with every action while preserving legacy events."""
@@ -67,9 +68,9 @@ class ReportTests(unittest.TestCase):
 
     def test_escaping_and_failure_details(self):
         """Quotes, Unicode, slashes, braces and newlines survive the JSON round trip."""
-        hostname = 'Zotac "office" \\ ø {host}'
+        hostname = 'Example "host" \\ ø {host}'
         error = 'Backup "failed" at C:\\backup\\data'
-        stderr = 'line one\nline two {detail} – ø'
+        stderr = 'line one\nline two {detail} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ ÃƒÆ’Ã‚Â¸'
         self.cfg.set('server', 'hostname', hostname)
         self.cfg.set('report', 'status', 'FAILURE')
         self.cfg.set('report', 'title', '{hostname}: {action}')
@@ -103,7 +104,7 @@ class ReportTests(unittest.TestCase):
         self.cfg.set('mqtt', 'message', template)
         report = json.loads(self.app.build_mqtt_message(self.cfg))
         self.assertEqual(report['status'], 'success')
-        self.assertEqual(report['host'], 'proxmox')
+        self.assertEqual(report['host'], 'example-host')
         self.assertEqual(report['source'], 'unattended-upgrades')
 
     def test_invalid_custom_payloads(self):
@@ -150,8 +151,8 @@ class ReportTests(unittest.TestCase):
     def test_published_payload_and_exact_topics(self):
         """Inspect actual publish arguments for both subscribed topics and report outcomes."""
         automation = (ROOT / 'HomeAssistant' / 'home-assistant-automation.yaml').read_text(encoding='utf-8')
-        topics = ['homeassistant/Syncerate/Zotac-RI531-RPI5-Storage/status',
-                  'homeassistant/Syncerate/Zotac-RI531-AsusN14E/status']
+        topics = ['homeassistant/Syncerate/example-job-a/status',
+                  'homeassistant/Syncerate/example-job-b/status']
         for topic in topics:
             self.assertIn('topic: ' + topic, automation)
             for status in ['success', 'failure']:
@@ -238,7 +239,7 @@ class ReportTests(unittest.TestCase):
     def test_both_config_examples_load(self):
         """Both distributed configs load through the app and produce the right JSON event."""
         for name, backend, action in [('config-sendmail-none.example.ini', 'sendmail', 'none'),
-                                      ('config-smtp.example.ini', 'smtp', 'shutdown')]:
+                                      ('config-smtp.example.ini', 'smtp', 'none')]:
             with self.subTest(name=name):
                 cfg = self.app.load_config(str(ROOT / 'configs' / name))
                 self.assertEqual(cfg.get('mail', 'backend'), backend)
@@ -261,15 +262,15 @@ class ReportTests(unittest.TestCase):
         cfg = self.app.load_config(str(ROOT / 'configs' / 'config-smtp.example.ini'))
         with patch.object(self.app.smtplib, 'SMTP') as smtp, patch.object(self.app.smtplib, 'SMTP_SSL') as smtp_ssl, patch.object(self.app.ssl, 'create_default_context', return_value='test-context'), contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(self.app.send_mail(cfg, 'success', 'MQTT published'))
-            smtp.assert_called_once_with('smtp.gmail.com', 587, timeout=20.0)
+            smtp.assert_called_once_with('smtp.example.com', 587, timeout=20.0)
             smtp_ssl.assert_not_called()
             server = smtp.return_value.__enter__.return_value
             message = server.send_message.call_args.args[0]
             self.assertEqual(server.method_calls, [call.ehlo(), call.starttls(context='test-context'),
-                             call.ehlo(), call.login('yourgmail@gmail.com', 'your-gmail-app-password'),
+                             call.ehlo(), call.login('sender@example.com', 'replace-with-password'),
                              call.send_message(message)])
             self.assertEqual(message['To'], 'receiver@example.com')
-            self.assertEqual(message['From'], 'yourgmail@gmail.com')
+            self.assertEqual(message['From'], 'sender@example.com')
             self.assertIn(self.app.build_mqtt_message(cfg), message.get_content())
 
     def test_smtp_ssl_and_environment_password(self):
@@ -282,9 +283,9 @@ class ReportTests(unittest.TestCase):
         with patch.dict('os.environ', {'MQTT_ACTION_TEST_SMTP_SECRET': 'test-secret'}), patch.object(self.app.smtplib, 'SMTP') as smtp, patch.object(self.app.smtplib, 'SMTP_SSL') as smtp_ssl, patch.object(self.app.ssl, 'create_default_context', return_value='test-context'), contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(self.app.send_mail(cfg, 'success', 'MQTT published'))
             smtp.assert_not_called()
-            smtp_ssl.assert_called_once_with('smtp.gmail.com', 465, timeout=20.0, context='test-context')
+            smtp_ssl.assert_called_once_with('smtp.example.com', 465, timeout=20.0, context='test-context')
             server = smtp_ssl.return_value.__enter__.return_value
-            server.login.assert_called_once_with('yourgmail@gmail.com', 'test-secret')
+            server.login.assert_called_once_with('sender@example.com', 'test-secret')
             server.starttls.assert_not_called()
             server.send_message.assert_called_once()
 
@@ -308,7 +309,7 @@ class ReportTests(unittest.TestCase):
         power.assert_not_called()
         sleep.assert_not_called()
 
-    def test_smtp_full_dry_run_order(self):
+    def test_smtp_full_notification_order(self):
         """Run the SMTP example through main with fake connections and inspect operation order."""
         events = []
         client = Mock()
@@ -318,11 +319,11 @@ class ReportTests(unittest.TestCase):
         with patch.object(sys, 'argv', ['app', '--config', cfg_path]), patch.object(self.app, 'make_mqtt_client', return_value=client), patch.object(self.app.smtplib, 'SMTP') as smtp, patch.object(self.app.ssl, 'create_default_context', return_value='test-context'), patch.object(self.app.subprocess, 'run') as power, patch.object(self.app.time, 'sleep', side_effect=lambda delay: events.append(('delay', delay))), contextlib.redirect_stdout(io.StringIO()) as output:
             smtp.return_value.__enter__.return_value.send_message.side_effect = lambda message: events.append('mail')
             self.app.main()
-            self.assertEqual(events, ['mqtt', 'mail', ('delay', 10.0)])
-            self.assertIn('DRY-RUN: Would run: systemctl poweroff', output.getvalue())
+            self.assertEqual(events, ['mqtt', 'mail'])
+            self.assertNotIn('Would run:', output.getvalue())
             power.assert_not_called()
             report = json.loads(client.publish.call_args.kwargs['payload'])
-            self.assertEqual(report['event'], 'server_shutdown')
+            self.assertEqual(report['event'], 'success')
 
     def test_sendmail_example_routes_to_sendmail(self):
         """The relocated sendmail config still uses the local sender and valid report bytes."""
@@ -331,8 +332,99 @@ class ReportTests(unittest.TestCase):
             self.assertTrue(self.app.send_mail(cfg, 'success', 'MQTT published'))
             smtp.assert_not_called()
             self.assertEqual(sender.call_args.args[0], ['/test/sendmail', '-t'])
-            self.assertIn(b'proxmox', sender.call_args.kwargs['input'])
+            self.assertIn(b'example-host', sender.call_args.kwargs['input'])
             self.assertTrue(sender.call_args.kwargs['check'])
+
+    def service_settings(self):
+        """Read shipped unit directives/variables for static wiring checks, not systemd emulation."""
+        directives = {}
+        environment = {}
+        for line in (ROOT / 'watchtower.service').read_text().splitlines():
+            if not line or line.startswith(('#', '[', ';')):
+                continue
+            key, value = line.split('=', 1)
+            directives.setdefault(key, []).append(value)
+            if key == 'Environment':
+                for setting in shlex.split(value):
+                    name, content = setting.split('=', 1)
+                    environment[name] = content
+        return directives, environment
+
+    def service_arguments(self, command, environment):
+        """Expand the unit's braced variables as single arguments to inspect file references."""
+        arguments = shlex.split(command)
+        for index, argument in enumerate(arguments):
+            for name, value in environment.items():
+                argument = argument.replace('${' + name + '}', value)
+            arguments[index] = argument
+        return arguments
+
+    def test_service_report_paths_and_config_selection(self):
+        """ExecStartPost resolves the shipped reporter and either config independently of cwd."""
+        unit, _ = self.service_settings()
+        install_root = PurePosixPath('/opt/mqtt-power-action')
+        self.assertEqual(len(unit['ExecStartPost']), 1)
+        for filename, backend in [('config-sendmail-none.example.ini', 'sendmail'), ('config-smtp.example.ini', 'smtp')]:
+            args = shlex.split(unit['ExecStartPost'][0])
+            args[3] = args[3].replace('config-sendmail-none.example.ini', filename)
+            self.assertEqual(args[0], '/usr/bin/python3')
+            self.assertEqual(args[2], '-c')
+            self.assertEqual(args[4:], ['--watchtower-compose', '/opt/watchtower/docker-compose.yaml', '--watchtower-service', 'watchtower'])
+            script = ROOT / PurePosixPath(args[1]).relative_to(install_root)
+            config = ROOT / PurePosixPath(args[3]).relative_to(install_root)
+            self.assertEqual(script, ROOT / 'mqtt_power_action_none.py')
+            self.assertTrue(script.is_file())
+            cfg = self.app.load_config(str(config))
+            self.assertEqual(cfg.get('mail', 'backend'), backend)
+
+    def test_service_systemd_owned_lifecycle(self):
+        """The unit keeps pull/up/report phases in ExecStartPre/ExecStart/ExecStartPost."""
+        unit, _ = self.service_settings()
+        self.assertEqual(unit['WorkingDirectory'], ['/opt/watchtower'])
+        self.assertEqual(shlex.split(unit['ExecStartPre'][0]),
+                         ['-/usr/bin/docker', 'compose', '-f', 'docker-compose.yaml', 'pull', 'watchtower'])
+        self.assertEqual(shlex.split(unit['ExecStart'][0]),
+                         ['-/usr/bin/docker', 'compose', '-f', 'docker-compose.yaml', 'up',
+                          '--abort-on-container-exit', '--exit-code-from', 'watchtower', 'watchtower'])
+        post = shlex.split(unit['ExecStartPost'][0])
+        self.assertEqual(post[0], '/usr/bin/python3')
+        self.assertEqual(post[-4:], ['--watchtower-compose', '/opt/watchtower/docker-compose.yaml',
+                                    '--watchtower-service', 'watchtower'])
+        self.assertEqual(shlex.split(unit['ExecStop'][0]),
+                         ['/usr/bin/docker', 'compose', '-f', 'docker-compose.yaml', 'down'])
+        self.assertEqual(unit['Type'], ['oneshot'])
+        self.assertEqual(unit['RemainAfterExit'], ['yes'])
+        self.assertEqual(unit['TimeoutStartSec'], ['0'])
+        self.assertEqual(unit['TimeoutStopSec'], ['120'])
+        self.assertFalse((ROOT / 'run_watchtower_once.py').exists())
+
+    def test_service_report_invocation_for_both_backends(self):
+        """Run the post-start reporter with fake completed Compose status/logs for both mail configs."""
+        unit, _ = self.service_settings()
+        install_root = PurePosixPath('/opt/mqtt-power-action')
+        ps = types.SimpleNamespace(returncode=0, stdout=json.dumps({'Service': 'watchtower', 'ExitCode': 0, 'State': 'exited'}))
+        logs = types.SimpleNamespace(returncode=0, stdout=json.dumps({'msg': 'Session done', 'level': 'info', 'Scanned': 1, 'Updated': 0, 'Failed': 0}))
+        for filename, backend in [('config-sendmail-none.example.ini', 'sendmail'), ('config-smtp.example.ini', 'smtp')]:
+            with self.subTest(backend=backend):
+                arguments = shlex.split(unit['ExecStartPost'][0])
+                arguments[3] = arguments[3].replace('config-sendmail-none.example.ini', filename)
+                local_args = [str(ROOT / PurePosixPath(arguments[1]).relative_to(install_root)),
+                              '--config', str(ROOT / PurePosixPath(arguments[3]).relative_to(install_root))] + arguments[4:]
+                with patch.object(sys, 'argv', local_args), \
+                     patch.object(self.app, 'publish_mqtt', return_value=(True, 'mock MQTT')) as publish, \
+                     patch.object(self.app, 'send_mail', return_value=True) as mail, \
+                     patch.object(self.app.subprocess, 'run', side_effect=[ps, logs]) as docker, \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit) as done:
+                        self.app.main()
+                    self.assertEqual(done.exception.code, 0)
+                publish.assert_called_once()
+                mail.assert_called_once()
+                self.assertEqual(docker.call_count, 2)
+                cfg = publish.call_args.args[0]
+                self.assertEqual(cfg.get('mail', 'backend'), backend)
+                self.assertEqual(cfg.get('power', 'action'), 'none')
+                self.assertEqual(cfg.watchtower_report['status'], 'success')
 
     def test_cli_parser(self):
         """Verify both config flags plus help/error exits with Paho import stubbed."""
