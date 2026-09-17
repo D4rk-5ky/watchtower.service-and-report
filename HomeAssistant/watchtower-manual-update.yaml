@@ -141,6 +141,7 @@ actions:
     condition: template
     value_template: >-
       {{ wait.completed and
+         not (wait.trigger.payload_json.dry_run | default(false)) and
          wait.trigger.payload_json.status | default('unknown') | string | trim | lower == 'success' }}
   - action: notify.pushover
     continue_on_error: true

@@ -1,94 +1,176 @@
 {
-  "version": "0.0.15",
-  "archive_root": "mqtt-power-action-0.0.15",
+  "version": "0.0.16",
+  "archive_root": "watchtower.service-and-report-0.0.16",
   "hash_algorithm": "SHA-256",
-  "self_hash_note": "The manifest self-entry has null hash/size. The external ZIP checksum covers it.",
-  "previous_release": "0.0.14",
-  "previous_release_removed_paths": [],
+  "original_archive": "watchtower.service-and-report-main.zip",
+  "original_archive_sha256": "6de5e39cac3e9ceff766156cd208b510b63f8e3067a453ca09e781075af97ea2",
+  "previous_release": "0.0.15",
+  "original_file_count": 18,
+  "file_count": 21,
+  "removed_paths": [],
+  "self_hash_note": "Null self-hash/size avoids recursion; external ZIP checksum covers this manifest.",
   "files": [
     {
+      "path": ".gitignore",
+      "status": "unchanged",
+      "size": 72,
+      "sha256": "c5e9dcd0d6904f16c5ff1061397e3ffe9a0e2f652e2fc48fc7acd3d5b9cb284c",
+      "original_size": 72,
+      "original_sha256": "c5e9dcd0d6904f16c5ff1061397e3ffe9a0e2f652e2fc48fc7acd3d5b9cb284c"
+    },
+    {
+      "path": "HomeAssistant/home-assistant-automation.yaml",
+      "status": "unchanged",
+      "size": 9639,
+      "sha256": "8e72dcbf868b51284f5a2c5b8ba0dee852992be5b2be6c1164c68019e335d407",
+      "original_size": 9639,
+      "original_sha256": "8e72dcbf868b51284f5a2c5b8ba0dee852992be5b2be6c1164c68019e335d407"
+    },
+    {
+      "path": "HomeAssistant/jonsbo-daily-with-watchtower.yaml",
+      "status": "added",
+      "size": 9615,
+      "sha256": "14fca3756f95259f01d40530648cc6e08d7c9fe49238e28f06c585415ab24dc9"
+    },
+    {
+      "path": "HomeAssistant/syncerate-all-servers.yaml",
+      "status": "unchanged",
+      "size": 3825,
+      "sha256": "0d915269aa9375c2c591b915bf1e17e4f8f293977985757c13fe007cb7ee332a",
+      "original_size": 3825,
+      "original_sha256": "0d915269aa9375c2c591b915bf1e17e4f8f293977985757c13fe007cb7ee332a"
+    },
+    {
       "path": "HomeAssistant/watchtower-manual-update.yaml",
-      "size": 5753,
-      "sha256": "55af2f569f9da1132b1db402911c097a69c5e5a3ae60d376972840f4777eb8d9",
-      "vs_0.0.14": "unchanged"
-    },
-    {
-      "path": "README.md",
-      "size": 16848,
-      "sha256": "5413af946ffa6b7ce4c761b95b96a1ff28cff4ca3d068bc42337c5447093809e",
-      "vs_0.0.14": "updated"
-    },
-    {
-      "path": "VERIFICATION.md",
-      "size": 6745,
-      "sha256": "77a2a5fbb05a411bb9251be13a5702bf3d305a75a2c5bda625fd99a011b6f976",
-      "vs_0.0.14": "updated"
-    },
-    {
-      "path": "VERSION",
-      "size": 7,
-      "sha256": "c7a7731a83ec67d107b65232828977adc4373af137dc22f278b59d6747b79ee2",
-      "vs_0.0.14": "updated"
-    },
-    {
-      "path": "VERSIONING.md",
-      "size": 24225,
-      "sha256": "a6cf2237bb6b9699cf6b49f57833d408bbb70d25a42a863f5ffa762be349e270",
-      "vs_0.0.14": "updated"
-    },
-    {
-      "path": "commented_code_map.md",
-      "size": 14534,
-      "sha256": "44c7a0ed306be9ae520bbac640ea922bdc85e0062055416fbec0f4169fa6e8b1",
-      "vs_0.0.14": "updated"
-    },
-    {
-      "path": "compose.example.yaml",
-      "size": 1464,
-      "sha256": "b8b84c1ba028bec8b6505bf0f0984361457817a71b0d545cc59ee55dca936681",
-      "vs_0.0.14": "updated"
-    },
-    {
-      "path": "configs/config-sendmail-none.example.ini",
-      "size": 7919,
-      "sha256": "b9a232001ab2756e29908a1111cbec60022dbbb824c1ac11abec19f118218466",
-      "vs_0.0.14": "unchanged"
-    },
-    {
-      "path": "configs/config-smtp.example.ini",
-      "size": 6576,
-      "sha256": "0fe8f72c690a7d328df236766e95d7d23e91f007252f28a7b5abbf9810eeb8cf",
-      "vs_0.0.14": "unchanged"
-    },
-    {
-      "path": "mqtt_power_action_none.py",
-      "size": 45868,
-      "sha256": "218b6e936ca177dc4564ddc26e2ca25e9a76781405e867303b7dd09646a53f03",
-      "vs_0.0.14": "updated"
-    },
-    {
-      "path": "systemd/watchtower.service",
-      "size": 2117,
-      "sha256": "f8142428f3724052eb0fd7178e5db178b6ddaebb626ed3e952c1a89f6cb52be8",
-      "vs_0.0.14": "unchanged"
-    },
-    {
-      "path": "tests/test_mqtt_reports.py",
-      "size": 33916,
-      "sha256": "6ebd150bb452a76b8becdb7a97c687f13ef6b47ccaca0a847660644e1dccb35f",
-      "vs_0.0.14": "unchanged"
-    },
-    {
-      "path": "tests/test_watchtower_flow.py",
-      "size": 18132,
-      "sha256": "6944d98b93597a10b55e32da907dd1ee8e8f234943cc32e36b353777d08303a9",
-      "vs_0.0.14": "updated"
+      "status": "updated",
+      "size": 5823,
+      "sha256": "7532abb90d91f7a75bf225ce8cbb627d38a906df6a91cb7e32331c370d584c1e",
+      "original_size": 5753,
+      "original_sha256": "55af2f569f9da1132b1db402911c097a69c5e5a3ae60d376972840f4777eb8d9"
     },
     {
       "path": "MANIFEST.json",
+      "status": "updated",
       "size": null,
       "sha256": null,
-      "vs_0.0.14": "updated"
+      "original_size": 2861,
+      "original_sha256": "7371b2465c02bce356a2262caf60b72361d5941cb0dac0fb3aab2e210b6324c2"
+    },
+    {
+      "path": "README.md",
+      "status": "updated",
+      "size": 17389,
+      "sha256": "64e0906ee16a4622a8a8c43f4565b641ee7bf30b8b3c752ca3de6aa18191c286",
+      "original_size": 16848,
+      "original_sha256": "5413af946ffa6b7ce4c761b95b96a1ff28cff4ca3d068bc42337c5447093809e"
+    },
+    {
+      "path": "VERIFICATION.md",
+      "status": "updated",
+      "size": 6265,
+      "sha256": "b5e4f46d9f2e3284df6c7adf27786a89690299cd7916411afc93eae88d2c0b27",
+      "original_size": 6745,
+      "original_sha256": "77a2a5fbb05a411bb9251be13a5702bf3d305a75a2c5bda625fd99a011b6f976"
+    },
+    {
+      "path": "VERSION",
+      "status": "updated",
+      "size": 7,
+      "sha256": "32b2a9a75cf864ae305d51be5c32d687fba891d494997ffea3b0538feba06abe",
+      "original_size": 7,
+      "original_sha256": "c7a7731a83ec67d107b65232828977adc4373af137dc22f278b59d6747b79ee2"
+    },
+    {
+      "path": "VERSIONING.md",
+      "status": "updated",
+      "size": 28135,
+      "sha256": "191c634dc6685ee13a918af5dc5ac7fdd000c367de9f0f90631c03be67afb80d",
+      "original_size": 24225,
+      "original_sha256": "a6cf2237bb6b9699cf6b49f57833d408bbb70d25a42a863f5ffa762be349e270"
+    },
+    {
+      "path": "commented_code_map.md",
+      "status": "updated",
+      "size": 22177,
+      "sha256": "ae0a6755c255efa6bd10e3b5259b847b6a89524705af6e028f4b0f3913cdcefa",
+      "original_size": 14534,
+      "original_sha256": "44c7a0ed306be9ae520bbac640ea922bdc85e0062055416fbec0f4169fa6e8b1"
+    },
+    {
+      "path": "compose.example.yaml",
+      "status": "unchanged",
+      "size": 1464,
+      "sha256": "b8b84c1ba028bec8b6505bf0f0984361457817a71b0d545cc59ee55dca936681",
+      "original_size": 1464,
+      "original_sha256": "b8b84c1ba028bec8b6505bf0f0984361457817a71b0d545cc59ee55dca936681"
+    },
+    {
+      "path": "configs/config-jonsbo-watchtower.example.ini",
+      "status": "added",
+      "size": 8664,
+      "sha256": "14ae8666966ea40eca207a35002513b97caa54f3cb9ffae93d652ca9f70e08ce"
+    },
+    {
+      "path": "configs/config-sendmail-none.example.ini",
+      "status": "updated",
+      "size": 8452,
+      "sha256": "7dc2bc5899d6e9fd92b33b0001ad7491221c1c4d0756bd610f24a6701c813078",
+      "original_size": 7919,
+      "original_sha256": "b9a232001ab2756e29908a1111cbec60022dbbb824c1ac11abec19f118218466"
+    },
+    {
+      "path": "configs/config-smtp.example.ini",
+      "status": "updated",
+      "size": 7281,
+      "sha256": "546753ba26b2f6716af614f168eb734e0b2c042d61ef4c0ee38b1dd788b823b4",
+      "original_size": 6576,
+      "original_sha256": "0fe8f72c690a7d328df236766e95d7d23e91f007252f28a7b5abbf9810eeb8cf"
+    },
+    {
+      "path": "mqtt_power_action_none.py",
+      "status": "updated",
+      "size": 41924,
+      "sha256": "d2960b84491e69881fd49d03c6247bbdb81e5829fa3449861796d067313e8463",
+      "original_size": 27288,
+      "original_sha256": "4f7878b4d4bbb08e50a2f9cb1f40110ae0475469ae81446bb0ea1759ac6894de"
+    },
+    {
+      "path": "systemd/watchtower.service",
+      "status": "unchanged",
+      "size": 2117,
+      "sha256": "f8142428f3724052eb0fd7178e5db178b6ddaebb626ed3e952c1a89f6cb52be8",
+      "original_size": 2117,
+      "original_sha256": "f8142428f3724052eb0fd7178e5db178b6ddaebb626ed3e952c1a89f6cb52be8"
+    },
+    {
+      "path": "tests/test_mqtt_reports.py",
+      "status": "updated",
+      "size": 32344,
+      "sha256": "edef1633e51199426ac9ac45c5e97a9a20cbf4923aeb37a7f3cb1f99a529681a",
+      "original_size": 33916,
+      "original_sha256": "6ebd150bb452a76b8becdb7a97c687f13ef6b47ccaca0a847660644e1dccb35f"
+    },
+    {
+      "path": "tests/test_syncerate_compatibility.py",
+      "status": "added",
+      "size": 17701,
+      "sha256": "fe577228b232b922c8a0af5d5b5834eab6b30dcec76ebdae14b272e759a0e56d"
+    },
+    {
+      "path": "tests/test_watchtower_flow.py",
+      "status": "updated",
+      "size": 18188,
+      "sha256": "5af12e39eef14efba73505cb7089aca7de0dca195a94b73fe24e601e6800f365",
+      "original_size": 18132,
+      "original_sha256": "6944d98b93597a10b55e32da907dd1ee8e8f234943cc32e36b353777d08303a9"
+    },
+    {
+      "path": "watchtower.service",
+      "status": "updated",
+      "size": 2117,
+      "sha256": "f8142428f3724052eb0fd7178e5db178b6ddaebb626ed3e952c1a89f6cb52be8",
+      "original_size": 1632,
+      "original_sha256": "2227c2d4a22e86195ea842744e2d4d2f4dc0b52fa6ce40b971b4e3e869fc1705"
     }
   ]
 }

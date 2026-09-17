@@ -1,109 +1,202 @@
-# Commented Code Map
+# Commented code and command map — 0.0.16
 
-This file maps the current 0.0.15 code and operational commands. It describes what each function/command does and why it exists.
+Current implementation: one runtime Python file, reusing shared config, JSON, MQTT, mail and power helpers. The supplied Syncerate project is a contract reference, not a runtime dependency.
 
-## Project files
+## Runtime functions
+
+| Function | What it does and why |
+| --- | --- |
+| `config_error` | Print a controlled configuration failure and exit 2 before external actions. |
+| `get_str` | Read and strip a string with required/default handling so all settings share validation rules. |
+| `get_int` | Reuse get_str and validate integer configuration values. |
+| `get_float` | Reuse get_str and validate decimal delays/timeouts. |
+| `get_bool` | Read configparser booleans consistently and reject malformed values. |
+| `feature_enabled` | Omitted channels are disabled; existing sections default to enabled. |
+| `get_password` | Use a direct password first, otherwise the named environment variable, without duplicating precedence logic. |
+| `get_config_hostname` | Use the configured friendly host, falling back to the OS hostname for consistent identities. |
+| `make_safe_id` | Normalize host text for MQTT client identifiers. |
+| `get_event_name_for_action` | Map none/shutdown/reboot to legacy event names independently of the completed-job status. |
+| `render_template` | Expand only the documented hostname/action/event placeholders; fail on malformed templates. |
+| `encode_mqtt_report` | Validate the consumer contract and serialize strict, UTF-8 JSON. |
+| `build_mqtt_report` | Use Syncerate's typed status fields without claiming power completion. |
+| `build_mqtt_message` | Reuse one serializer for ordinary, custom, mail, and verified Watchtower reports. |
+| `get_mqtt_client_id` | Generate a hostname-based ID or expand a custom template for the broker connection. |
+| `load_config` | Read INI without interpolation; validate power/report settings and enabled transports before side effects. |
+| `publish_mqtt` | Honor master/preview switches; reuse report serialization and pass credentials through stdin to a bounded child. DNS/connect/publish stalls cannot block indefinitely. |
+| `publish_worker` | Read the private JSON request and call Paho single with retain=False; keep optional Paho dependency and network work inside the child. |
+| `find_sendmail` | Choose explicit sendmail path, common system paths or PATH without shell interpolation. |
+| `build_mail_message` | Build headers/body with report JSON, optional extra text, and a DRY-RUN subject marker so previews are identifiable. |
+| `send_mail_sendmail` | Feed message bytes to sendmail -t and report delivery-command success/failure. |
+| `send_mail_smtp` | Use SMTP/SMTP_SSL, optional STARTTLS and authentication; fail without connecting when the resolved password is missing. |
+| `send_mail` | Honor master and preview switches, then reuse one message builder and route to the chosen mail backend. |
+| `run_power_action` | No-op for none; print rather than execute in previews; otherwise call systemctl poweroff/reboot. |
+| `redact_watchtower_text` | Remove configured secrets and common credential forms before forwarding logs. |
+| `parse_watchtower_log_record` | Accept JSON and LogFmt logs; never coerce JSON booleans into counters. |
+| `inspect_watchtower_output` | Fail closed unless exactly one complete session and zero failures are verified. |
+| `_read_runtime_text` | Read a small runtime marker without executing its contents. |
+| `parse_compose_exit_code` | Handle Compose object/array/JSON-lines output; require one stopped service. |
+| `report_watchtower` | Inspect only the finished run, then attempt one non-retained result report. |
+| `parse_args` | Document config, version, Compose service and paired run-marker flags; reject invalid mode combinations early. |
+| `try_send_mail` | Mail failures must not prevent an MQTT failure report. |
+| `report_failure` | Build a forced JSON failure, attempt MQTT and optional failure email, and preserve the original error exit code. |
+| `main` | Dispatch verified Watchtower mode or ordinary readiness/power mode. Enforce independent preview opt-ins and notification abort/continuation gates. |
+
+The entry-point guard handles the private worker switch in its own process and exits nonzero without exposing worker exception details. All normal execution exits with the result from `main()`.
+
+## Files
 
 | File | Purpose |
 | --- | --- |
-| `mqtt_power_action_none.py` | Main optional-MQTT/optional-mail/power reporter plus completed-Watchtower result inspection. |
-| `systemd/watchtower.service` | Keeps Watchtower lifecycle in systemd: pull, run/wait, post-run reporting, teardown. |
-| `compose.example.yaml` | Redacted one-shot Watchtower Compose example with recommended JSON/info logging; the parser also accepts default Auto/LogFmt output. |
-| `configs/config-sendmail-none.example.ini` | Complete 43-option example using local sendmail and no local power action. |
-| `configs/config-smtp.example.ini` | Complete 43-option example using SMTP and no local power action. |
-| `HomeAssistant/watchtower-manual-update.yaml` | Redacted one-host workflow that waits on one shared result-topic trigger, filters by JSON `host`, reads JSON `status`, and shuts down only after success. |
-| `tests/test_mqtt_reports.py` | Offline report/config/mail/power/systemd wiring regressions. |
-| `tests/test_watchtower_flow.py` | Offline Watchtower result parsing and HA flow regressions. |
-| `README.md` | Current usage only. |
-| `VERSIONING.md` | Version-by-version change history. |
-| `VERIFICATION.md` | Checks performed for the current package. |
-| `MANIFEST.json` | File sizes/hashes and previous-release accounting. |
-| `VERSION` | Current package version. |
+| `.gitignore` | Original repository ignore settings, preserved. |
+| `mqtt_power_action_none.py` | Runtime CLI/reporting application. |
+| `watchtower.service` | Preserved root unit path; synchronized with the systemd copy. |
+| `systemd/watchtower.service` | Canonical installation source for pull → run → inspect/report → normal teardown. |
+| `compose.example.yaml` | Dedicated one-shot Watchtower stack with info/JSON logging and optional native email. |
+| `configs/config-sendmail-none.example.ini` | All 48 options with sendmail selected, no local action, safe preview default. |
+| `configs/config-smtp.example.ini` | All 48 options with SMTP selected, no local action, safe preview default. |
+| `configs/config-jonsbo-watchtower.example.ini` | All 48 options with JonsBo host/topic, real MQTT, disabled email and no local action. |
+| `HomeAssistant/home-assistant-automation.yaml` | Original supplied reference retained byte-for-byte; not the new chain. |
+| `HomeAssistant/syncerate-all-servers.yaml` | Original supplied generic consumer retained byte-for-byte. |
+| `HomeAssistant/watchtower-manual-update.yaml` | Alternative shared-topic manual flow with readiness, timeout and final non-preview success gate. |
+| `HomeAssistant/jonsbo-daily-with-watchtower.yaml` | Requested chain extension: CleanUpIn → Watchtower → shutdown; rejects previews and mismatched/incomplete Watchtower reports. |
+| `README.md` | Current usage, install instructions, all CLI flags and all 48 config options. |
+| `VERSION` | Canonical release version; matches executable --version. |
+| `VERSIONING.md` | Canonical cumulative history; case-insensitive systems cannot also store a distinct versioning.md. |
+| `commented_code_map.md` | This complete function/command map. |
+| `VERIFICATION.md` | Actual release checks and environment limitations. |
+| `MANIFEST.json` | Original-ZIP comparison, final per-file SHA-256 and explicit null self-hash. |
 
-## `mqtt_power_action_none.py` functions
+## Operational commands and flags
 
-| Function | What it does | Why it exists |
-| --- | --- | --- |
-| `config_error(message)` | Prints a consistent configuration error and exits 2. | Keeps invalid configuration failures predictable and prevents unsafe partial execution. |
-| `get_str(config, section, option, default, required)` | Reads/strips string settings with required/default handling. | Centralizes repeated INI lookup rules. |
-| `get_int(...)` | Reads a setting through `get_str` and converts it to integer. | Reuses common validation for ports, QoS, and integer fields. |
-| `get_float(...)` | Reads a setting and converts it to float. | Supports timeouts/delays without duplicating parsing code. |
-| `get_bool(...)` | Reads configparser-compatible booleans. | Normalizes true/false option handling. |
-| `feature_enabled(config, section)` | Treats an explicit `enabled` boolean as the master switch; an omitted optional section is disabled, while an existing legacy section without `enabled` remains enabled. | Makes MQTT and mail independently optional without breaking older configs. |
-| `get_password(value, env_var)` | Uses a direct password first, otherwise reads the named environment variable. | Supports secrets outside the INI while preserving explicit override behavior. |
-| `get_config_hostname(config)` | Uses `[server] hostname`, falling back to `socket.gethostname()`. | Gives reports/templates a stable friendly host label. |
-| `make_safe_id(value)` | Lowercases and replaces unsupported client-ID characters. | Prevents awkward/special hostname characters from producing unsafe MQTT client IDs. |
-| `get_event_name_for_action(action)` | Maps `shutdown`, `reboot`, `none` to report event names. | Preserves the original event contract independently of job `status`. |
-| `render_template(value, config)` | Expands `{hostname}`, `{safe_hostname}`, `{action}`, `{event}`. | Reuses one controlled template mechanism for topics, client IDs, subjects, and custom payloads. |
-| `encode_mqtt_report(report)` | Validates required JSON object/status and known field types, then emits compact strict JSON. | Prevents malformed payloads from reaching Home Assistant. |
-| `build_mqtt_message(config, force_auto=False)` | Builds auto/custom ordinary reports, or encodes the runtime Watchtower result. `force_auto=True` ignores an unused MQTT custom template for mail-only reporting. | Reuses one validated result serializer while keeping mail-only mode independent of MQTT configuration. |
-| `get_mqtt_client_id(config)` | Builds automatic hostname-based client IDs or renders a configured template. | Keeps MQTT identity configurable without duplicating template logic. |
-| `load_config(path)` | Loads the INI, always validates the power action, and validates MQTT or mail settings only when that channel is enabled. MQTT-enabled mode also checks that Paho is installed. | Rejects relevant configuration problems before side effects without letting disabled features break a run. |
-| `make_mqtt_client(client_id)` | Creates Paho v2 client with a v1 fallback. | Keeps compatibility with both commonly deployed Paho APIs. |
-| `reason_code_to_int(reason_code)` | Normalizes different Paho callback result representations to an integer. | Makes connection success/failure checks version-independent. |
-| `wait_for_publish_compatible(info, timeout)` | Uses timeout-aware publish waiting when available and the older fallback otherwise. | Preserves compatibility across Paho versions. |
-| `publish_mqtt(config)` | Returns a successful no-op when MQTT is disabled; otherwise connects, authenticates, publishes JSON, waits for confirmation, and returns `(ok, details)`. | Keeps MQTT optional and contains all transport handling in one reusable function. |
-| nested `on_connect(...)` | Stores the broker connection result and releases the waiting thread. | Lets synchronous main flow safely wait for Paho's asynchronous connect callback. |
-| `find_sendmail(path)` | Uses configured executable or searches common sendmail locations/PATH. | Supports local MTA delivery without shell command construction. |
-| `build_mail_message(config, mail_type, details)` | Builds email headers/body and includes the result JSON. In mail-only mode it forces automatic result generation and labels MQTT as disabled. | Keeps email useful without making it depend on MQTT settings. |
-| `send_mail_sendmail(config, msg, mail_type)` | Sends message bytes to `sendmail -t`. | Provides local-MTA delivery without shell interpolation. |
-| `send_mail_smtp(config, msg, mail_type)` | Handles SMTP/SMTP_SSL, optional STARTTLS, login, and send. | Provides direct authenticated SMTP delivery. |
-| `send_mail(config, mail_type, details)` | Returns a successful no-op when mail is disabled; otherwise builds a message and routes it to sendmail or SMTP. | Makes mail independently optional while keeping backend selection out of main flow. |
-| `run_power_action(config)` | Performs/dry-runs `systemctl poweroff` or `systemctl reboot`, or no-ops for `none`. | Centralizes the dangerous local power action behind configuration safety checks. |
-| `redact_watchtower_text(text, config)` | Removes configured secrets, URL credentials, and common password assignments from forwarded diagnostics. | Reduces accidental credential disclosure in MQTT/email result fields. |
-| `parse_watchtower_log_record(line)` | Parses one Watchtower line as JSON first, then as the default LogFmt/Auto syntax; numeric session counters are normalized to integers. | Lets production Watchtower 1.7.1 defaults and explicit JSON logging use the same strict verifier without configuration-specific workarounds. |
-| `inspect_watchtower_output(output, returncode, config)` | Parses Watchtower JSON or LogFmt logs, validates one `Session done` record/counters, detects failed updates/errors, and builds a bounded result object. | Converts completed Watchtower output into a reliable `success`/`failure` contract instead of trusting exit code alone. |
-| `_read_runtime_text(path, label)` | Reads a per-run systemd timestamp/exit-code marker and returns the value plus any read error. | Keeps current-run correlation fail-closed without shell interpolation. |
-| `parse_compose_exit_code(output, service)` | Reads `ExitCode` from Docker Compose `ps --format json` output in object, array, or line-delimited forms. | Lets the post-start reporter recover the completed container exit status after systemd has already run it. |
-| `report_watchtower(config, compose_file, service, since_file, exit_code_file)` | Validates safe report mode, uses the captured current-run Compose exit code when supplied, scopes logs with `--since` to the current invocation, fails closed on missing markers, then reports through enabled channels. Manual use without runtime files can still fall back to Compose `ps`. | Prevents stale Watchtower logs/container state from being mistaken for the current run while keeping execution in systemd. |
-| `parse_args()` | Defines `-c/--config`, `--watchtower-compose`, `--watchtower-service`, `--watchtower-since-file`, and `--watchtower-exit-code-file`. | Makes ordinary/report mode explicit and self-documented via `--help`. |
-| `main()` | Dispatches Watchtower report mode or ordinary optional-MQTT/optional-mail/power mode and enforces failure gates only for enabled channels. | Provides the single application entry point. |
-
-## systemd service directives and commands
-
-| Directive/command | What it does and why |
+| Command/directive | What it does and why |
 | --- | --- |
-| `Requires=docker.service` | Requires Docker for the unit. |
-| `After=docker.service network-online.target` | Orders the unit after Docker/network startup. |
-| `Wants=network-online.target` | Requests network-online startup support without making it a hard dependency. |
-| `Type=oneshot` | systemd waits for the update/report sequence to complete. |
-| `RemainAfterExit=no` | Lets a successful one-shot return to the inactive/stopped state immediately after `ExecStartPost` finishes, so another `systemctl start` can run the job again without a prior stop/restart. |
-| `WorkingDirectory=/opt/watchtower` | Example directory containing the dedicated Compose file; user must customize it. |
-| `RuntimeDirectory=mqtt-power-action` | Creates `/run/mqtt-power-action` for per-invocation timestamp and exit-code markers. |
-| timestamp/reset `ExecStartPre` commands | Remove stale marker files and record this service invocation start time before Docker work begins. |
-| `ExecStartPre=-/usr/bin/docker compose -f docker-compose.yaml pull watchtower` | Pulls the Watchtower image exactly once. The leading `-` allows an existing local image to be tried and the final result to be reported if the pull fails. |
-| `ExecStart=/bin/sh -c ... docker compose ... up --pull never ...` | Runs/waits for the one-shot service without a second pull, writes the actual current Compose exit code to `/run/mqtt-power-action/watchtower-exit-code`, then returns control so post-reporting always runs. |
-| `ExecStartPost=/usr/bin/python3 ... --watchtower-since-file ... --watchtower-exit-code-file ...` | Reads only current-invocation logs and the captured current Compose exit code, reports the verified result through enabled channels, and becomes the final success/failure gate. |
-| `ExecStop=/usr/bin/docker compose -f docker-compose.yaml down` | Tears down the dedicated Compose project when the non-remaining oneshot enters its stop phase after reporting, and on an explicit stop. |
-| `TimeoutStartSec=0` | Does not impose a systemd startup timeout on the update. |
-| `TimeoutStopSec=120` | Bounds the stop/teardown phase. |
-| `systemctl start watchtower.service` | Starts a fresh pull/update/report sequence whenever the unit is not running. After reporting, the unit automatically runs its stop/Compose-down phase and returns to inactive on success. |
-| `systemctl stop watchtower.service` | Explicitly stops an in-progress/active unit; the normal completed oneshot also reaches the teardown path automatically. |
-| `systemctl status watchtower.service` | Shows inactive/dead after a successful completed run, or failed after an unsuccessful post-run report. |
-| `journalctl -u watchtower.service -n 100 --no-pager` | Displays Docker output and reporter diagnostics. |
-| `systemd-analyze verify /etc/systemd/system/watchtower.service` | Performs native unit syntax/dependency validation without running the workload. |
+| `python3 … --help / -h` | Show every public flag without loading configuration. |
+| `python3 … --version / cat VERSION` | Read executable/package version without external actions. |
+| `python3 … -c PATH / --config PATH` | Choose the full INI for ordinary reporting/readiness and optional power. |
+| `--watchtower-compose FILE` | Inspect the finished job using this Compose file; forbids local power actions. |
+| `--watchtower-service NAME` | Select the Compose service, default watchtower. |
+| `--watchtower-since-file FILE` | Read a timezone-aware start timestamp; requires the exit-code marker. |
+| `--watchtower-exit-code-file FILE` | Read this invocation's Compose exit code; requires the timestamp marker. |
+| `--mqtt-publish` | Private child-process switch: reads broker/request data from stdin, never command-line secrets. |
+| `docker compose -f FILE ps --all --format json SERVICE` | Manual marker-less fallback to inspect one stopped container exit code. |
+| `docker compose -f FILE logs --no-color --no-log-prefix [--since TIME] SERVICE` | Read parseable completed-run logs, scoped to the service invocation when markers exist. |
+| `Requires=docker.service; After=docker.service network-online.target; Wants=network-online.target` | Require Docker and order startup after network readiness. |
+| `Type=oneshot; RemainAfterExit=no` | Wait for update/report and allow a subsequent fresh start after normal completion. |
+| `RuntimeDirectory=mqtt-power-action; RuntimeDirectoryMode=0755` | Create the per-run marker directory under /run. |
+| `WorkingDirectory=/opt/watchtower` | Choose the dedicated Compose project directory. |
+| `ExecStartPre: rm -f marker files` | Discard stale runtime markers before each invocation. |
+| `ExecStartPre: date --iso-8601=seconds > start marker` | Record invocation time before Docker work, enabling --since log filtering. |
+| `ExecStartPre: docker compose … pull watchtower` | Pull once. Leading - lets the existing local image be tried if pull fails. |
+| `ExecStart: docker compose … up --pull never --abort-on-container-exit --exit-code-from watchtower watchtower` | Run/wait for the one-shot job without pulling twice. Shell captures its actual exit status into the marker and exits 0 so post-reporting runs. |
+| `ExecStartPost: python3 … --watchtower-compose … --watchtower-since-file … --watchtower-exit-code-file …` | Verify the captured invocation and notify through enabled channels; return the final unit gate. |
+| `ExecStop: docker compose … down` | Tear down the dedicated stack on normal stop. Startup/post-start failures can skip this hook. |
+| `TimeoutStartSec=0; TimeoutStopSec=120` | Allow long updates and bound normal stop to 120 seconds. |
+| `WantedBy=multi-user.target` | Defines the installation target if the user chooses to enable boot startup; instructions only start on demand. |
+| `sudo install -m 644 systemd/watchtower.service /etc/systemd/system/watchtower.service` | Install the edited unit with standard readable permissions. |
+| `systemctl daemon-reload` | Reload the edited installed unit. |
+| `systemd-analyze verify …` | Validate native unit wiring without starting the update. |
+| `systemctl start / stop / status watchtower.service` | Run one job, request a stop, or inspect status. |
+| `journalctl -u watchtower.service -n 100 --no-pager` | Read the last 100 unit log messages for diagnostics. |
+| `systemctl poweroff / reboot` | Ordinary-mode local power commands; blocked by dry_run and never reached in Watchtower mode. |
+| `sendmail -t` | Read email recipients from headers and accept the prepared message on stdin. |
+| `python3 -m unittest discover -s tests -v` | Run offline regressions, including mocked external operations and a fake-Paho subprocess. |
+| `python3 -m py_compile …` | Compile all Python sources to check syntax; omit generated bytecode from release archives. |
+| `HA mqtt.publish start_watchtower` | External listener must start the Watchtower service; the reporter does not subscribe to commands. |
+| `HA mqtt.publish shutdown_delay` | External listener performs delayed shutdown only after the JonsBo Watchtower result gate. |
+| `HA backup/cleanup mqtt.publish commands` | Preserve start_asusn14e_weekly, start_rpi5_weekly, start_snapbeforewatchtower_cleanup and start_cleanupinsyncoidsnapshots_cleanup in the existing sequence. |
+| `HA switch.turn_on / notify.pushover / persistent_notification.create` | Wake the configured host or report readiness/result/timeout through the existing HA channels. |
+| `HA script.example_host_shutdown_ping_check_loop` | Generic manual example's external shutdown script, protected by its final success guard. |
 
-## CLI commands
+## Test functions and methods
 
-| Command | Purpose |
+Every method below runs offline. Transport/power methods use mocks except the explicitly named fake-Paho worker test, which starts a real local child with no network implementation.
+
+### `tests/test_mqtt_reports.py`
+
+| Function/method | Check or helper purpose |
 | --- | --- |
-| `python3 mqtt_power_action_none.py --help` | Show all application flags. |
-| `python3 mqtt_power_action_none.py -c PATH` | Ordinary configured flow with independently optional MQTT/mail plus optional power action. |
-| `python3 mqtt_power_action_none.py --config PATH` | Long-form equivalent of `-c`. |
-| `python3 mqtt_power_action_none.py -c PATH --watchtower-compose FILE --watchtower-service NAME [--watchtower-since-file FILE] [--watchtower-exit-code-file FILE]` | Inspect an already-completed Compose Watchtower service and process its verified result and use the enabled notification channels. |
-| `cat VERSION` | Show package version. |
-| `python3 -m unittest discover -s tests -v` | Run offline regression tests. |
-| `python3 -m py_compile ...` | Check Python syntax without executing external actions. |
+| `ReportTests.setUp` | Load a fresh app with an in-memory Paho stand-in and example config. |
+| `ReportTests.assert_config_error` | Require a controlled config exit instead of a traceback or side effect. |
+| `ReportTests.test_default_report` | Automatic output is an object with exactly the documented typed fields. |
+| `ReportTests.test_auto_without_report_section` | Automatic defaults work without maintaining an original config snapshot. |
+| `ReportTests.test_status_independent_of_action` | Both job outcomes work with every action while preserving legacy events. |
+| `ReportTests.test_escaping_and_failure_details` | Quotes, Unicode, slashes, braces and newlines survive the JSON round trip. |
+| `ReportTests.test_custom_object_and_title_fallback` | Custom payloads replace report settings and allow the consumer's name/job keys. |
+| `ReportTests.test_commented_custom_example` | The shipped commented template actually renders to consumer-compatible JSON. |
+| `ReportTests.test_invalid_custom_payloads` | Plain text, arrays, missing/unknown status, bad types and nonfinite JSON fail. |
+| `ReportTests.test_invalid_auto_settings` | Invalid automatic status/code/warning are config errors. |
+| `ReportTests.test_invalid_report_stops_before_io` | Even continuation flags cannot publish or execute power with invalid JSON. |
+| `ReportTests.test_published_payload_and_shared_topic` | Either outcome uses the configured topic and bounded worker transport. |
+| `ReportTests.test_optional_mqtt_disabled_needs_no_paho_or_mqtt_settings` | Disabled MQTT is a dependency-free no-op and ignores unused MQTT settings. |
+| `ReportTests.test_optional_mail_disabled_ignores_unused_mail_settings` | Disabled mail ignores backend/recipient/SMTP settings and never sends. |
+| `ReportTests.test_omitted_optional_sections_are_disabled` | A config may omit both optional output sections entirely. |
+| `ReportTests.test_mqtt_only_mode_never_sends_mail` | mail.enabled=false leaves MQTT and the later power path independent. |
+| `ReportTests.test_mail_only_mode_needs_no_mqtt_transport` | Mail-only mode bypasses the MQTT worker and retains the power gate. |
+| `ReportTests.test_none_and_dry_run_guards` | Every original action/dry-run combination retains its command suppression. |
+| `ReportTests.test_failure_gates` | Notification failures abort power unless the matching explicit override is set. |
+| `ReportTests.test_dry_run_skips_delay_and_notifications` | The supplied Python preview skips delay as well as mail/MQTT/power by default. |
+| `ReportTests.test_power_failure_is_reported_by_mail` | A rejected power command retains its exit code and reports failure to MQTT/mail. |
+| `ReportTests.test_mail_includes_same_json` | Mail troubleshooting context includes the exact generated report. |
+| `ReportTests.test_both_config_examples_load` | Both distributed configs load through the app and produce the right JSON event. |
+| `ReportTests.test_smtp_starttls_delivery` | The supplied SMTP config selects STARTTLS, logs in and sends the report email. |
+| `ReportTests.test_smtp_ssl_and_environment_password` | Implicit TLS selects SMTP_SSL and accepts the configured password environment. |
+| `ReportTests.test_smtp_missing_password_never_connects` | An absent resolved environment password fails before any SMTP connection. |
+| `ReportTests.test_smtp_failure_aborts_power` | Real SMTP routing under mocks preserves abort-before-power behavior. |
+| `ReportTests.test_smtp_full_notification_order` | Mail readiness is completed before publishing readiness for a power action. |
+| `ReportTests.test_sendmail_example_routes_to_sendmail` | The relocated sendmail config still uses the local sender and valid report bytes. |
+| `ReportTests.service_settings` | Read shipped unit directives/variables for static wiring checks, not systemd emulation. |
+| `ReportTests.service_arguments` | Expand the unit's braced variables as single arguments to inspect file references. |
+| `ReportTests.test_service_report_paths_and_config_selection` | ExecStartPost resolves the shipped reporter and either config independently of cwd. |
+| `ReportTests.test_service_systemd_owned_lifecycle` | The unit keeps pull/up/report phases in ExecStartPre/ExecStart/ExecStartPost. |
+| `ReportTests.test_service_report_invocation_for_both_backends` | Run the post-start reporter with fake completed Compose status/logs for both mail configs. |
+| `ReportTests.test_cli_parser` | Verify both config flags plus help/error exits with Paho import stubbed. |
+### `tests/test_syncerate_compatibility.py`
 
-## Test helper/method map
+| Function/method | Check or helper purpose |
+| --- | --- |
+| `CompatibilityTests.setUp` | Reuse the original fixture without importing Paho or contacting any service. |
+| `CompatibilityTests.test_syncerate_contract_for_success_failure_warning` | Match Syncerate's common keys/types while identifying Watchtower as the job. |
+| `CompatibilityTests.test_dry_run_notification_matrix` | Every MQTT/mail opt-in combination is independent and never powers the host. |
+| `CompatibilityTests.test_dry_run_failure_mail_and_disabled_master_switch` | Preview failure selects on_failure; master switches still override preview opt-ins. |
+| `CompatibilityTests.test_worker_always_non_retained` | The actual Paho boundary hard-codes retain=False, as Syncerate JSON does. |
+| `CompatibilityTests.test_worker_failure_deadline_and_secret_suppression` | Timeouts/start failures cannot hang or disclose captured credentials. |
+| `CompatibilityTests.test_no_failure_can_be_overridden_in_watchtower_mode` | Continuation flags and report.status cannot turn an actual failed job into success. |
+| `CompatibilityTests.test_bad_markers_never_read_historical_logs` | Missing timezone, invalid dates/codes, and absent files fail before Docker inspection. |
+| `CompatibilityTests.test_malformed_logs_running_container_and_duplicate_services` | Ambiguous or incomplete data must not authorize continuation. |
+| `CompatibilityTests.test_redaction_and_payload_bounds` | Large errors remain bounded after configured and generic secrets are removed. |
+| `CompatibilityTests.test_marker_reader` | Marker reads reject empty/oversized/missing input and never execute text. |
+| `CompatibilityTests.test_cli_markers_must_be_paired` | Reject partial runtime correlation and unrelated mode flags at CLI parsing. |
+| `CompatibilityTests.test_real_worker_subprocess_with_fake_paho` | Execute the real worker with a fake Paho module; check wire data and hard timeout. |
+| `CompatibilityTests.test_watchtower_preview_notification_matrix` | Watchtower previews obey both opt-ins and preserve completed-job verification. |
+| `CompatibilityTests.test_custom_message_survives_ordinary_publish` | Generated readiness metadata must not silently replace a valid custom message. |
+| `JonsBoTests.setUp` | Load the shipped automation and a minimal HA-compatible boolean filter. |
+| `JonsBoTests.condition` | Evaluate the trigger/template subset used by result routing. |
+| `JonsBoTests.commands` | Walk result guards/choose branches and collect emitted MQTT command payloads. |
+| `JonsBoTests.test_cleanup_starts_watchtower_and_only_watchtower_success_shuts_down` | Protect the exact chain requested by the user, including failure/preview guards. |
+| `JonsBoTests.test_topic_and_config_agree` | Ensure the supplied JonsBo publisher and consumer use the same host/topic. |
+### `tests/test_watchtower_flow.py`
 
-`tests/test_mqtt_reports.py` defines `ReportTests.setUp`, `assert_config_error`, report-format/validation tests, optional MQTT/mail tests, MQTT/power failure-gate tests, mail backend tests, `service_settings`, `service_arguments`, service wiring/invocation tests, and CLI parser tests. These methods use mocks only; they exist to protect the original safety behavior and the current systemd wiring.
-
-`tests/test_watchtower_flow.py` defines `WatchtowerReportTests.setUp`, `report`, strict session/exit tests, failure-detail/redaction tests, Compose exit-code parser tests, completed-job-only reporter tests, disabled-channel Watchtower tests, report-delivery/preflight tests, and release-layout checks that protect the systemd subfolder and excluded reference YAML. `AutomationTests.setUp`, `render_bool`, `condition`, and `walk_actions` form a small offline evaluator used by the success/failure/timeout shutdown-guard tests and Compose logging checks.
-
-## Home Assistant flow
-
-When MQTT is enabled, the Watchtower publisher and HA examples use one shared result-topic contract. `mqtt_power_action_none.py` publishes a JSON object containing `status` and `host`; it does not publish separate success and failure topics.
-
-`watchtower-manual-update.yaml` publishes `start_watchtower`, then has exactly one MQTT wait trigger on the shared result topic. That trigger matches the expected `host` and accepts the report regardless of outcome. Later template conditions read `wait.trigger.payload_json.status`: only exact `success` reaches the final shutdown guard; `failure`, unknown/malformed status, or timeout stops without shutdown. It uses `mode: restart` so a new manual invocation replaces an older still-running invocation.
-
+| Function/method | Check or helper purpose |
+| --- | --- |
+| `WatchtowerReportTests.setUp` | Prepare/evaluate setUp for isolated regression assertions. |
+| `WatchtowerReportTests.report` | Prepare/evaluate report for isolated regression assertions. |
+| `WatchtowerReportTests.test_session_gate_and_exit_codes` | Verify session gate and exit codes to protect the behavior named in this regression. |
+| `WatchtowerReportTests.test_failed_container_details_and_redaction` | Verify failed container details and redaction to protect the behavior named in this regression. |
+| `WatchtowerReportTests.test_default_logfmt_session_is_accepted` | Verify default logfmt session is accepted to protect the behavior named in this regression. |
+| `WatchtowerReportTests.test_default_logfmt_failed_session_still_fails` | Verify default logfmt failed session still fails to protect the behavior named in this regression. |
+| `WatchtowerReportTests.test_parse_compose_exit_code_shapes` | Verify parse compose exit code shapes to protect the behavior named in this regression. |
+| `WatchtowerReportTests.test_reporter_reads_completed_job_without_starting_it` | Verify reporter reads completed job without starting it to protect the behavior named in this regression. |
+| `WatchtowerReportTests.test_reporter_publishes_failure_for_failed_or_unverifiable_job` | Verify reporter publishes failure for failed or unverifiable job to protect the behavior named in this regression. |
+| `WatchtowerReportTests.test_watchtower_both_output_channels_can_be_disabled` | Verified job status still controls systemd when MQTT and mail are both disabled. |
+| `WatchtowerReportTests.test_reporting_failure_does_not_turn_job_into_success` | Verify reporting failure does not turn job into success to protect the behavior named in this regression. |
+| `WatchtowerReportTests.test_current_run_markers_scope_logs_and_override_stale_container_state` | Systemd mode uses the captured current exit code and --since marker, never stale ps state. |
+| `WatchtowerReportTests.test_missing_current_run_marker_fails_closed_without_replaying_history` | A missing requested timestamp must not fall back to unbounded historical container logs. |
+| `WatchtowerReportTests.test_preflight_and_cli` | Verify preflight and cli to protect the behavior named in this regression. |
+| `WatchtowerReportTests.test_release_layout_preserves_all_original_files` | Preserve every supplied project file, including service and automation references. |
+| `AutomationTests.setUp` | Prepare/evaluate setUp for isolated regression assertions. |
+| `AutomationTests.render_bool` | Prepare/evaluate render bool for isolated regression assertions. |
+| `AutomationTests.condition` | Prepare/evaluate condition for isolated regression assertions. |
+| `AutomationTests.walk_actions` | Prepare/evaluate walk actions for isolated regression assertions. |
+| `AutomationTests.test_shutdown_only_after_success` | Verify shutdown only after success to protect the behavior named in this regression. |
+| `AutomationTests.test_json_wait_matching_and_redacted_examples` | Verify json wait matching and redacted examples to protect the behavior named in this regression. |
+| `AutomationTests.test_schedule_readiness_and_compose_logging` | Verify schedule readiness and compose logging to protect the behavior named in this regression. |

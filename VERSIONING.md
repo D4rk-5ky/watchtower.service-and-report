@@ -1,7 +1,7 @@
 # Versioning
 
-The current package version is stored in `VERSION`. The application has no
-`--version` command. Use this one canonical change log (case-insensitive Windows
+The current package version is stored in `VERSION`. The application also exposes
+`--version`. Use this one canonical change log (case-insensitive Windows
 filesystems cannot also maintain a separate `versioning.md`).
 
 ## Rules
@@ -15,6 +15,20 @@ filesystems cannot also maintain a separate `versioning.md`).
 - Preserve required current project files; do not bundle original snapshots.
   Exclude bytecode, caches, build output, and temporary files. Verify the archive
   against the supplied file inventory, accounting for authorized moves/removals.
+
+## 0.0.16 — 2026-09-17
+
+- Base this release on the supplied archive's VERSION/MANIFEST/history (0.0.15), incrementing exactly once to 0.0.16. The archive's Python file instead declared 1.1.0 and lacked the Watchtower commands used by its service/tests; reconcile the executable version and restore the missing reporting path in the existing script. Preserve every original file path, including reference YAMLs and the root unit despite older exclusion tests.
+- Match Syncerate's common MQTT JSON keys and types: status, success, title/name, job, exit_code, warning, error, stderr, and skipped_datasets. Identify completed Watchtower jobs with job=watchtower and phase=completed; retain host/event/action, dry-run, version/timestamp, message/comment and specific update diagnostics. Ordinary power success remains readiness, never proof of completed shutdown.
+- Restore action=none, optional MQTT/mail channel switches, ordinary report fields and strict custom JSON validation. Reuse existing config/template/mail/power functions and preserve the supplied subprocess MQTT publisher, its hard deadline, non-retained messages, secret-safe worker failures and abort/continuation gates. Retain forced JSON on failure/preview paths.
+- Restore completed-job JSON/LogFmt inspection with one valid Session done, strict integer counters, zero failed updates, no error/failed-container logs, and exit zero. Add bounded redacted diagnostics; reject malformed logs, ambiguous/running Compose state and invalid marker pairs. Inspection never starts containers; each Docker command times out after 30 seconds.
+- Restore --watchtower-compose, --watchtower-service, --watchtower-since-file and --watchtower-exit-code-file, with paired marker validation and fail-closed handling before historical-log access. Add --version. Keep the systemd pull-once/current-run-marker flow; synchronize the retained root unit to the systemd unit.
+- Preserve the supplied script's safe dry run (no delay/power or notifications by default). At the user's request, expose independent mqtt.publish_dry_run and mail.send_dry_run options; both default false and remain subordinate to master switches. Preview MQTT is marked dry_run/phase; preview emails receive [DRY-RUN] subjects. Mail event selection and failures work in opted-in previews.
+- Add HomeAssistant/jonsbo-daily-with-watchtower.yaml based on the pasted daily automation: after CleanUpIn success send start_watchtower; only a matching completed non-preview Watchtower success sends shutdown_delay. Keep existing schedule/entities/backup commands; guard source host, job, phase, success boolean and exit code. Preserve original reference automations. Add preview protection to the generic manual automation's final shutdown gate.
+- Add a full JonsBo config with the matching host/topic, action=none, live MQTT and disabled mail. Retain safe previews in both generic configs. All three examples include the same 48 options and corrected timeout/dry-run comments.
+- Rewrite README for current installation/usage, all flags and options, the external listener mapping, exact chain, preview behavior, report guarantees and limitations. Regenerate the map of every runtime/test function and operational command. Refresh verification and SHA-256 manifest against the actual supplied ZIP inventory.
+- Update all original regression tests to exercise the supplied bounded transport/return-code API, preserved file inventory and actual preview semantics instead of nonexistent Paho-client helpers or stale removal expectations. Add consumer-contract, independent preview opt-ins, worker retention/deadline, redaction, marker failure, and JonsBo branch tests. No test failures are hidden with new skips.
+- Package the full project without bytecode, cache, build output, dependencies or scratch files. No live broker, mail account, Docker host, power command or Home Assistant instance is changed.
 
 ## 0.0.15 — 2026-09-16
 
