@@ -1,32 +1,36 @@
 [Unit]
-Description=Watchtower one-shot update and MQTT result report
+Description=Watchtower one-shot update and optional result reporting
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
+RemainAfterExit=no
+RuntimeDirectory=mqtt-power-action
+RuntimeDirectoryMode=0755
 
 # Edit this to the directory containing the dedicated Watchtower Compose file.
 WorkingDirectory=/opt/watchtower
 
-# Pull the Watchtower image first. The leading '-' deliberately lets the main
-# Compose run continue so ExecStartPost can still publish a failure result if
-# pulling or starting ultimately fails.
+# Reset per-run state and timestamp this specific invocation before any Docker work.
+ExecStartPre=/usr/bin/rm -f /run/mqtt-power-action/watchtower-started-at /run/mqtt-power-action/watchtower-exit-code
+ExecStartPre=/bin/sh -c '/usr/bin/date --iso-8601=seconds > /run/mqtt-power-action/watchtower-started-at'
+
+# Pull Watchtower exactly once. A pull failure is allowed to continue so the existing
+# local image can still be tried and ExecStartPost can publish the final result.
 ExecStartPre=-/usr/bin/docker compose -f docker-compose.yaml pull watchtower
 
-# systemd owns the Watchtower lifecycle and waits for the one-shot container.
-# The leading '-' is intentional: ExecStartPost must run for BOTH successful and
-# unsuccessful Watchtower exits. ExecStartPost becomes the final success/failure gate.
-ExecStart=-/usr/bin/docker compose -f docker-compose.yaml up --abort-on-container-exit --exit-code-from watchtower watchtower
+# Run the one-shot job without pulling again. Capture THIS invocation's Compose exit
+# code, then return 0 deliberately so ExecStartPost always gets a chance to report.
+ExecStart=/bin/sh -c '/usr/bin/docker compose -f docker-compose.yaml up --pull never --abort-on-container-exit --exit-code-from watchtower watchtower; rc=$$?; printf "%%s\n" "$$rc" > /run/mqtt-power-action/watchtower-exit-code; exit 0'
 
-# Read the completed container exit status and JSON logs, then publish exactly
-# one MQTT JSON success/failure report. Change only the config filename to use
-# the SMTP example instead of the sendmail example.
-ExecStartPost=/usr/bin/python3 /opt/mqtt-power-action/mqtt_power_action_none.py -c /opt/mqtt-power-action/configs/config-sendmail-none.example.ini --watchtower-compose /opt/watchtower/docker-compose.yaml --watchtower-service watchtower
+# Read only logs newer than this invocation marker and use the captured current-run
+# Compose exit code. Historical Watchtower logs can therefore never satisfy success.
+# The --watchtower-compose value is ONLY the YAML path; never prefix it with WorkingDirectory=.
+ExecStartPost=/usr/bin/python3 /opt/mqtt-power-action/mqtt_power_action_none.py -c /opt/mqtt-power-action/configs/config-sendmail-none.example.ini --watchtower-compose /opt/watchtower/docker-compose.yaml --watchtower-service watchtower --watchtower-since-file /run/mqtt-power-action/watchtower-started-at --watchtower-exit-code-file /run/mqtt-power-action/watchtower-exit-code
 
-# Tear down this dedicated Compose project when the unit is stopped/restarted.
+# Tear down this dedicated Compose project after reporting and on an explicit stop.
 ExecStop=/usr/bin/docker compose -f docker-compose.yaml down
 
 TimeoutStartSec=0

@@ -143,7 +143,7 @@ class WatchtowerReportTests(unittest.TestCase):
         ps = types.SimpleNamespace(returncode=0, stdout=json.dumps({'Service': 'watchtower', 'ExitCode': 0}))
         success_logs = types.SimpleNamespace(returncode=0, stdout=json.dumps(self.session))
         with patch.object(self.app.subprocess, 'run', side_effect=[ps, success_logs]), \
-             patch.object(self.app, 'make_mqtt_client') as client, \
+             patch.object(self.app, 'publish_worker') as client, \
              patch.object(self.app, 'send_mail') as mail, \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.app.report_watchtower(self.cfg, '/opt/watchtower/docker-compose.yaml'), 0)
@@ -152,7 +152,7 @@ class WatchtowerReportTests(unittest.TestCase):
 
         failed_logs = types.SimpleNamespace(returncode=0, stdout=json.dumps(self.session | {'Failed': 1}))
         with patch.object(self.app.subprocess, 'run', side_effect=[ps, failed_logs]), \
-             patch.object(self.app, 'make_mqtt_client') as client, \
+             patch.object(self.app, 'publish_worker') as client, \
              patch.object(self.app, 'send_mail') as mail, \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.app.report_watchtower(self.cfg, '/opt/watchtower/docker-compose.yaml'), 1)
@@ -211,6 +211,13 @@ class WatchtowerReportTests(unittest.TestCase):
             publish.assert_not_called()
             self.cfg.set(section, option, old)
 
+        with patch.object(self.app.subprocess, 'run') as docker, \
+             contextlib.redirect_stdout(io.StringIO()), \
+             self.assertRaises(SystemExit) as err:
+            self.app.report_watchtower(self.cfg, 'WorkingDirectory=/Storage/WatchTower/docker-compose.yaml')
+        self.assertEqual(err.exception.code, 2)
+        docker.assert_not_called()
+
         with patch.object(sys, 'argv', ['app', '-c', 'config.ini',
                                         '--watchtower-compose', '/compose',
                                         '--watchtower-service', 'updater']):
@@ -218,12 +225,12 @@ class WatchtowerReportTests(unittest.TestCase):
         self.assertEqual(args.watchtower_compose, '/compose')
         self.assertEqual(args.watchtower_service, 'updater')
 
-    def test_release_layout_excludes_reference_consumer(self):
-        """Only the Watchtower HA example ships; Syncerate reference YAMLs are excluded."""
+    def test_release_layout_preserves_all_original_files(self):
+        """Preserve every supplied project file, including service and automation references."""
         self.assertTrue((ROOT / 'systemd/watchtower.service').is_file())
-        self.assertFalse((ROOT / 'watchtower.service').exists())
-        self.assertFalse((ROOT / 'HomeAssistant/syncerate-all-servers.yaml').exists())
-        self.assertFalse((ROOT / 'HomeAssistant/home-assistant-automation.yaml').exists())
+        self.assertEqual((ROOT / 'watchtower.service').read_bytes(), (ROOT / 'systemd/watchtower.service').read_bytes())
+        self.assertTrue((ROOT / 'HomeAssistant/syncerate-all-servers.yaml').exists())
+        self.assertTrue((ROOT / 'HomeAssistant/home-assistant-automation.yaml').exists())
 
 
 @unittest.skipIf(yaml is None, 'Install PyYAML and Jinja2 to run YAML flow checks')

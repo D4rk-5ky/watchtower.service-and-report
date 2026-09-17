@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import shlex
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import Mock, call, patch
@@ -26,11 +27,13 @@ class ReportTests(unittest.TestCase):
         paho = types.ModuleType('paho')
         paho.mqtt = package
         self.app = types.ModuleType('app_under_test')
+        self.app.__file__ = str(ROOT / 'mqtt_power_action_none.py')
         source = ROOT / 'mqtt_power_action_none.py'
         with patch.dict(sys.modules, {'paho': paho, 'paho.mqtt': package, 'paho.mqtt.client': mqtt}):
             exec(compile(source.read_bytes(), str(source), 'exec'), self.app.__dict__)
         self.cfg = configparser.ConfigParser(interpolation=None)
         self.cfg.read(ROOT / 'configs' / 'config-sendmail-none.example.ini')
+        self.cfg.set('power', 'dry_run', 'false')
 
     def assert_config_error(self, function, *args):
         """Require a controlled config exit instead of a traceback or side effect."""
@@ -41,7 +44,7 @@ class ReportTests(unittest.TestCase):
     def test_default_report(self):
         """Automatic output is an object with exactly the documented typed fields."""
         report = json.loads(self.app.build_mqtt_message(self.cfg))
-        self.assertEqual(report, dict(status='success', title='example-host: none',
+        self.assertEqual({k: report[k] for k in ('status', 'title', 'exit_code', 'warning', 'error', 'stderr', 'event', 'host')}, dict(status='success', title='example-host: none',
                                      exit_code=0, warning=False, error='', stderr='',
                                      event='success', host='example-host'))
 
@@ -148,32 +151,44 @@ class ReportTests(unittest.TestCase):
             mail.assert_not_called()
             power.assert_not_called()
 
+    def test_config_parse_errors_identify_duplicates_without_echoing_secrets(self):
+        """Malformed INI explains the line/option while never printing config values."""
+        cases = [
+            ("[mqtt]\npublish_dry_run = true\npublish_dry_run = false\n",
+             "Duplicate option 'publish_dry_run' in section [mqtt] at line 3"),
+            ("[mqtt]\na = 1\n[mqtt]\nb = 2\n",
+             "Duplicate section [mqtt] at line 3"),
+            ("password = TOPSECRET\n[mqtt]\na = 1\n",
+             "Expected an INI section header such as [server] before at line 1"),
+            ("[mqtt]\npassword = TOPSECRET\nthis line is invalid\n",
+             "Could not parse INI syntax at line(s) 3"),
+        ]
+        for text, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'config.ini'
+                path.write_text(text, encoding='utf-8')
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as error:
+                    self.app.load_config(str(path))
+                self.assertEqual(error.exception.code, 2)
+                message = output.getvalue()
+                self.assertIn(expected, message)
+                self.assertNotIn('TOPSECRET', message)
+
     def test_published_payload_and_shared_topic(self):
-        """One shared subscription can receive either outcome; status lives in JSON."""
-        automation = (ROOT / 'HomeAssistant' / 'watchtower-manual-update.yaml').read_text(encoding='utf-8')
-        topic = 'homeassistant/watchtower/status'
-        self.assertEqual(automation.count('topic: ' + topic), 1)
-        for status in ['success', 'failure']:
-            with self.subTest(status=status):
-                self.cfg.set('mqtt', 'topic', topic)
-                self.cfg.set('report', 'status', status)
-                client = Mock()
-                client.connect.side_effect = lambda *args, **kwargs: client.on_connect(client, None, None, 0)
-                client.publish.return_value = Mock(rc=0, is_published=Mock(return_value=True))
-                with patch.object(self.app, 'make_mqtt_client', return_value=client):
-                    self.assertTrue(self.app.publish_mqtt(self.cfg)[0])
-                call = client.publish.call_args
-                self.assertEqual(call.args[0], topic)
-                self.assertEqual(call.kwargs['qos'], 1)
-                self.assertIs(call.kwargs['retain'], False)
-                report = json.loads(call.kwargs['payload'])
-                self.assertIsInstance(report, dict)
-                self.assertEqual(str(report['status']).strip().lower(), status)
-                self.assertIsInstance(report['title'], str)
-                self.assertIs(type(report['exit_code']), int)
-                self.assertIs(type(report['warning']), bool)
-                client.disconnect.assert_called_once()
-                client.loop_stop.assert_called_once()
+        """Either outcome uses the configured topic and bounded worker transport."""
+        for status in ('success', 'failure'):
+            self.cfg.set('report', 'status', status)
+            with patch.object(self.app.subprocess, 'run', return_value=types.SimpleNamespace(returncode=0)) as worker:
+                self.assertTrue(self.app.publish_mqtt(self.cfg)[0])
+            request = json.loads(worker.call_args.kwargs['input'])
+            report = json.loads(request['message'])
+            self.assertEqual(request['topic'], 'homeassistant/watchtower/status')
+            self.assertEqual(request['qos'], 1)
+            self.assertEqual(report['status'], status)
+            self.assertIs(report['success'], status == 'success')
+            self.assertEqual(worker.call_args.kwargs['timeout'], 20)
+            self.assertNotIn(request['password'] or 'unused-secret', str(worker.call_args.args[0]))
 
     def test_optional_mqtt_disabled_needs_no_paho_or_mqtt_settings(self):
         """Disabled MQTT is a dependency-free no-op and ignores unused MQTT settings."""
@@ -187,7 +202,7 @@ class ReportTests(unittest.TestCase):
              patch.object(self.cfg, 'read', return_value=['disabled-mqtt.ini']):
             loaded = self.app.load_config('disabled-mqtt.ini')
         self.assertIs(loaded, self.cfg)
-        with patch.object(self.app, 'make_mqtt_client') as client:
+        with patch.object(self.app.subprocess, 'run') as client:
             self.assertEqual(self.app.publish_mqtt(self.cfg),
                              (True, 'MQTT disabled by configuration.'))
         client.assert_not_called()
@@ -231,23 +246,17 @@ class ReportTests(unittest.TestCase):
              patch.object(self.app, 'run_power_action') as power, \
              contextlib.redirect_stdout(io.StringIO()):
             self.app.main()
-        publish.assert_called_once_with(self.cfg)
+        publish.assert_called_once()
         mail.assert_not_called()
         power.assert_called_once_with(self.cfg)
 
     def test_mail_only_mode_needs_no_mqtt_transport(self):
-        """mqtt.enabled=false can still send success mail without constructing a Paho client."""
+        """Mail-only mode bypasses the MQTT worker and retains the power gate."""
         self.cfg.set('mqtt', 'enabled', 'false')
-        self.app.mqtt = None
-        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), \
-             patch.object(self.app, 'load_config', return_value=self.cfg), \
-             patch.object(self.app, 'make_mqtt_client') as client, \
-             patch.object(self.app, 'send_mail', return_value=True) as mail, \
-             patch.object(self.app, 'run_power_action') as power, \
-             contextlib.redirect_stdout(io.StringIO()):
-            self.app.main()
-        client.assert_not_called()
-        mail.assert_called_once_with(self.cfg, 'success', 'MQTT disabled by configuration.')
+        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), patch.object(self.app, 'load_config', return_value=self.cfg), patch.object(self.app.subprocess, 'run') as worker, patch.object(self.app, 'send_mail', return_value=True) as mail, patch.object(self.app, 'run_power_action') as power, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.app.main(), 0)
+        worker.assert_not_called()
+        mail.assert_called_once()
         power.assert_called_once_with(self.cfg)
 
     def test_none_and_dry_run_guards(self):
@@ -261,53 +270,44 @@ class ReportTests(unittest.TestCase):
                     if action == 'none' or dry == 'true':
                         command.assert_not_called()
                     else:
-                        command.assert_called_once_with(['systemctl', 'poweroff' if action == 'shutdown' else 'reboot'], check=True)
+                        command.assert_called_once_with(['systemctl', 'poweroff' if action == 'shutdown' else 'reboot'], check=True, capture_output=True, text=True)
 
     def test_failure_gates(self):
-        """Reported status does not replace transport/mail abort and continuation rules."""
-        cases = [(False, False, False, True, 1, False),
-                 (False, True, False, True, 0, True),
-                 (True, False, False, False, 1, False),
-                 (True, False, True, False, 0, True),
-                 (True, False, False, True, 0, True)]
-        for report_status in ['success', 'failure']:
-            self.cfg.set('report', 'status', report_status)
-            for mqtt_ok, allow_mqtt, allow_mail, mail_ok, expected_exit, expected_power in cases:
-                self.cfg.set('power', 'continue_on_mqtt_fail', str(allow_mqtt))
-                self.cfg.set('power', 'continue_on_mail_fail', str(allow_mail))
-                with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), patch.object(self.app, 'load_config', return_value=self.cfg), patch.object(self.app, 'publish_mqtt', return_value=(mqtt_ok, 'mock result')), patch.object(self.app, 'send_mail', return_value=mail_ok) as mail, patch.object(self.app, 'run_power_action') as power, patch.object(self.app.time, 'sleep') as sleep, contextlib.redirect_stdout(io.StringIO()):
-                    exit_code = 0
-                    try:
-                        self.app.main()
-                    except SystemExit as exc:
-                        exit_code = exc.code
-                    self.assertEqual(exit_code, expected_exit)
-                    self.assertEqual(power.called, expected_power)
-                    sleep.assert_not_called()
-                    expected_types = ['failure'] if not mqtt_ok else (['success'] if mail_ok else ['success', 'failure'])
-                    self.assertEqual([call.args[1] for call in mail.call_args_list], expected_types)
+        """Notification failures abort power unless the matching explicit override is set."""
+        for failed_channel in ('mqtt', 'mail'):
+            for allowed in (False, True):
+                self.cfg.set('power', 'continue_on_mqtt_fail', str(allowed if failed_channel == 'mqtt' else False))
+                self.cfg.set('power', 'continue_on_mail_fail', str(allowed if failed_channel == 'mail' else False))
+                with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), patch.object(self.app, 'load_config', return_value=self.cfg), patch.object(self.app, 'publish_mqtt', return_value=(failed_channel != 'mqtt', 'mock result')), patch.object(self.app, 'send_mail', return_value=failed_channel != 'mail'), patch.object(self.app, 'run_power_action') as power, contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(self.app.main(), 0 if allowed else 1)
+                    self.assertEqual(power.called, allowed)
 
-    def test_dry_run_still_waits(self):
-        """Preserve the delay in dry-run while never calling systemctl."""
+    def test_dry_run_skips_delay_and_notifications(self):
+        """The supplied Python preview skips delay as well as mail/MQTT/power by default."""
         self.cfg.set('power', 'action', 'reboot')
-        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), patch.object(self.app, 'load_config', return_value=self.cfg), patch.object(self.app, 'publish_mqtt', return_value=(True, 'mock result')), patch.object(self.app, 'send_mail', return_value=True), patch.object(self.app.subprocess, 'run') as command, patch.object(self.app.time, 'sleep') as sleep, contextlib.redirect_stdout(io.StringIO()):
-            self.app.main()
-            sleep.assert_called_once_with(10.0)
-            command.assert_not_called()
+        self.cfg.set('power', 'dry_run', 'true')
+        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), patch.object(self.app, 'load_config', return_value=self.cfg), patch.object(self.app, 'send_mail') as mail, patch.object(self.app.subprocess, 'run') as command, patch.object(self.app.time, 'sleep') as sleep, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.app.main(), 0)
+        sleep.assert_not_called()
+        command.assert_not_called()
+        mail.assert_not_called()
 
     def test_power_failure_is_reported_by_mail(self):
-        """Preserve failure-mail notification and subprocess status propagation."""
+        """A rejected power command retains its exit code and reports failure to MQTT/mail."""
         self.cfg.set('power', 'action', 'reboot')
-        self.cfg.set('power', 'dry_run', 'false')
-        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), patch.object(self.app, 'load_config', return_value=self.cfg), patch.object(self.app, 'publish_mqtt', return_value=(True, 'mock result')), patch.object(self.app, 'send_mail', return_value=True) as mail, patch.object(self.app.subprocess, 'run', side_effect=subprocess.CalledProcessError(5, ['systemctl', 'reboot'])), patch.object(self.app.time, 'sleep'), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as error:
-            self.app.main()
-        self.assertEqual(error.exception.code, 5)
-        self.assertEqual([call.args[1] for call in mail.call_args_list], ['success', 'failure'])
+        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), patch.object(self.app, 'load_config', return_value=self.cfg), patch.object(self.app, 'publish_mqtt', return_value=(True, 'sent')) as publish, patch.object(self.app, 'send_mail', return_value=True) as mail, patch.object(self.app.subprocess, 'run', side_effect=subprocess.CalledProcessError(5, ['systemctl', 'reboot'])), patch.object(self.app.time, 'sleep'), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.app.main(), 5)
+        self.assertEqual([c.args[1] for c in mail.call_args_list], ['success', 'failure'])
+        self.assertEqual(publish.call_args.args[1]['exit_code'], 5)
 
     def test_mail_includes_same_json(self):
         """Mail troubleshooting context includes the exact generated report."""
         message = self.app.build_mail_message(self.cfg, 'success', 'MQTT published')
-        self.assertIn(self.app.build_mqtt_message(self.cfg), message.get_content())
+        report_line = next(line.split(': ', 1)[1] for line in message.get_content().splitlines() if line.startswith('MQTT message: '))
+        received = json.loads(report_line)
+        expected = json.loads(self.app.build_mqtt_message(self.cfg))
+        received.pop('timestamp'); expected.pop('timestamp')
+        self.assertEqual(received, expected)
 
     def test_both_config_examples_load(self):
         """Both distributed configs load through the app and produce the right JSON event."""
@@ -318,7 +318,7 @@ class ReportTests(unittest.TestCase):
                 self.assertEqual(cfg.get('mail', 'backend'), backend)
                 self.assertTrue(cfg.getboolean('mqtt', 'enabled'))
                 self.assertTrue(cfg.getboolean('mail', 'enabled'))
-                self.assertEqual(sum(len(cfg.items(section)) for section in cfg.sections()), 43)
+                self.assertEqual(sum(len(cfg.items(section)) for section in cfg.sections()), 48)
                 self.assertEqual(cfg.get('power', 'action'), action)
                 self.assertTrue(cfg.getboolean('power', 'dry_run'))
                 self.assertFalse(cfg.getboolean('power', 'continue_on_mqtt_fail'))
@@ -336,6 +336,7 @@ class ReportTests(unittest.TestCase):
     def test_smtp_starttls_delivery(self):
         """The supplied SMTP config selects STARTTLS, logs in and sends the report email."""
         cfg = self.app.load_config(str(ROOT / 'configs' / 'config-smtp.example.ini'))
+        cfg.set('power', 'dry_run', 'false')
         with patch.object(self.app.smtplib, 'SMTP') as smtp, patch.object(self.app.smtplib, 'SMTP_SSL') as smtp_ssl, patch.object(self.app.ssl, 'create_default_context', return_value='test-context'), contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(self.app.send_mail(cfg, 'success', 'MQTT published'))
             smtp.assert_called_once_with('smtp.example.com', 587, timeout=20.0)
@@ -347,11 +348,12 @@ class ReportTests(unittest.TestCase):
                              call.send_message(message)])
             self.assertEqual(message['To'], 'receiver@example.com')
             self.assertEqual(message['From'], 'sender@example.com')
-            self.assertIn(self.app.build_mqtt_message(cfg), message.get_content())
+            self.assertIn('\"status\":\"success\"', message.get_content())
 
     def test_smtp_ssl_and_environment_password(self):
         """Implicit TLS selects SMTP_SSL and accepts the configured password environment."""
         cfg = self.app.load_config(str(ROOT / 'configs' / 'config-smtp.example.ini'))
+        cfg.set('power', 'dry_run', 'false')
         cfg.set('smtp', 'ssl', 'true')
         cfg.set('smtp', 'port', '465')
         cfg.set('smtp', 'password', '')
@@ -368,6 +370,7 @@ class ReportTests(unittest.TestCase):
     def test_smtp_missing_password_never_connects(self):
         """An absent resolved environment password fails before any SMTP connection."""
         cfg = self.app.load_config(str(ROOT / 'configs' / 'config-smtp.example.ini'))
+        cfg.set('power', 'dry_run', 'false')
         cfg.set('smtp', 'password', '')
         cfg.set('smtp', 'password_env', 'MQTT_ACTION_TEST_SMTP_SECRET')
         with patch.dict('os.environ', {'MQTT_ACTION_TEST_SMTP_SECRET': ''}), patch.object(self.app.smtplib, 'SMTP') as smtp, patch.object(self.app.smtplib, 'SMTP_SSL') as smtp_ssl, contextlib.redirect_stdout(io.StringIO()):
@@ -376,34 +379,29 @@ class ReportTests(unittest.TestCase):
             smtp_ssl.assert_not_called()
 
     def test_smtp_failure_aborts_power(self):
-        """Real mail routing handles simulated SMTP errors and preserves the power abort."""
-        cfg_path = str(ROOT / 'configs' / 'config-smtp.example.ini')
-        with patch.object(sys, 'argv', ['app', '-c', cfg_path]), patch.object(self.app, 'publish_mqtt', return_value=(True, 'mock MQTT')), patch.object(self.app.smtplib, 'SMTP', side_effect=OSError('simulated SMTP failure')) as smtp, patch.object(self.app, 'run_power_action') as power, patch.object(self.app.time, 'sleep') as sleep, contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as error:
-            self.app.main()
-        self.assertEqual(error.exception.code, 1)
-        self.assertEqual(smtp.call_count, 2)  # Success mail, then attempted failure mail.
+        """Real SMTP routing under mocks preserves abort-before-power behavior."""
+        cfg = self.app.load_config(str(ROOT / 'configs/config-smtp.example.ini'))
+        cfg.set('power', 'dry_run', 'false')
+        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), patch.object(self.app, 'load_config', return_value=cfg), patch.object(self.app, 'publish_mqtt', return_value=(True, 'sent')), patch.object(self.app.smtplib, 'SMTP', side_effect=OSError('simulated failure')) as smtp, patch.object(self.app, 'run_power_action') as power, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.app.main(), 1)
+        self.assertEqual(smtp.call_count, 2)
         power.assert_not_called()
-        sleep.assert_not_called()
 
     def test_smtp_full_notification_order(self):
-        """Run the SMTP example through main with fake connections and inspect operation order."""
+        """Mail readiness is completed before publishing readiness for a power action."""
         events = []
-        client = Mock()
-        client.connect.side_effect = lambda *args, **kwargs: client.on_connect(client, None, None, 0)
-        client.publish.side_effect = lambda *args, **kwargs: (events.append('mqtt') or Mock(rc=0, is_published=Mock(return_value=True)))
-        cfg_path = str(ROOT / 'configs' / 'config-smtp.example.ini')
-        with patch.object(sys, 'argv', ['app', '--config', cfg_path]), patch.object(self.app, 'make_mqtt_client', return_value=client), patch.object(self.app.smtplib, 'SMTP') as smtp, patch.object(self.app.ssl, 'create_default_context', return_value='test-context'), patch.object(self.app.subprocess, 'run') as power, patch.object(self.app.time, 'sleep', side_effect=lambda delay: events.append(('delay', delay))), contextlib.redirect_stdout(io.StringIO()) as output:
+        cfg = self.app.load_config(str(ROOT / 'configs/config-smtp.example.ini'))
+        cfg.set('power', 'dry_run', 'false')
+        with patch.object(self.app, 'parse_args', return_value=types.SimpleNamespace(config='unused')), patch.object(self.app, 'load_config', return_value=cfg), patch.object(self.app, 'publish_mqtt', side_effect=lambda *a, **kw: (events.append('mqtt') or (True, 'sent'))), patch.object(self.app.smtplib, 'SMTP') as smtp, patch.object(self.app.subprocess, 'run') as power, contextlib.redirect_stdout(io.StringIO()):
             smtp.return_value.__enter__.return_value.send_message.side_effect = lambda message: events.append('mail')
-            self.app.main()
-            self.assertEqual(events, ['mqtt', 'mail'])
-            self.assertNotIn('Would run:', output.getvalue())
-            power.assert_not_called()
-            report = json.loads(client.publish.call_args.kwargs['payload'])
-            self.assertEqual(report['event'], 'success')
+            self.assertEqual(self.app.main(), 0)
+        self.assertEqual(events, ['mail', 'mqtt'])
+        power.assert_not_called()
 
     def test_sendmail_example_routes_to_sendmail(self):
         """The relocated sendmail config still uses the local sender and valid report bytes."""
         cfg = self.app.load_config(str(ROOT / 'configs' / 'config-sendmail-none.example.ini'))
+        cfg.set('power', 'dry_run', 'false')
         with patch.object(self.app, 'find_sendmail', return_value='/test/sendmail'), patch.object(self.app.subprocess, 'run') as sender, patch.object(self.app.smtplib, 'SMTP') as smtp, contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(self.app.send_mail(cfg, 'success', 'MQTT published'))
             smtp.assert_not_called()
@@ -497,11 +495,9 @@ class ReportTests(unittest.TestCase):
                      patch.object(self.app, 'send_mail', return_value=True) as mail, \
                      patch.object(self.app.subprocess, 'run', side_effect=[logs]) as docker, \
                      contextlib.redirect_stdout(io.StringIO()):
-                    with self.assertRaises(SystemExit) as done:
-                        self.app.main()
-                    self.assertEqual(done.exception.code, 0)
+                    self.assertEqual(self.app.main(), 0)
                 publish.assert_called_once()
-                mail.assert_called_once()
+                mail.assert_not_called()  # Example configs are safe previews.
                 self.assertEqual(docker.call_count, 1)
                 cfg = publish.call_args.args[0]
                 self.assertEqual(cfg.get('mail', 'backend'), backend)

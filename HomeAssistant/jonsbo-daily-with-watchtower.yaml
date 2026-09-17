@@ -1,0 +1,250 @@
+alias: >-
+  JonsBo N3 - Daily backup at cheapest time - Combined with SnapBefore and
+  CleanUpIn and Watchtower
+description: >
+  Wake JonsBo N3 if needed, wait until it is online, then start the first
+  backup. Process MQTT success and failure reports to continue the backup
+  sequence.
+triggers:
+  - trigger: time
+    at: sensor.daily_backup_cheapest_start
+    id: cheapest_start
+    weekday:
+      - mon
+  - trigger: mqtt
+    id: jonsbo_asusn14e_status
+    options:
+      topic: homeassistant/Syncerate/JonsBo-N3-CWWK-10Gbe-8P-N355-NAS-AsusN14E/status
+  - trigger: mqtt
+    id: jonsbo_rpi5_status
+    options:
+      topic: >-
+        homeassistant/Syncerate/JonsBo-N3-CWWK-10Gbe-8P-N355-NAS-RPI5-BackUp/status
+  - trigger: mqtt
+    id: cleanupinsyncoidsnapshots_status
+    options:
+      topic: homeassistant/CleanUpInSyncoidSnapshots/JonsBoN3-CWWK-N355/status
+  - trigger: mqtt
+    id: snapbeforewatchtower_status
+    options:
+      topic: homeassistant/SnapBeforeWatchTower/JonsBo-N3-CWWK-N355/status
+  - trigger: mqtt
+    id: watchtower_status
+    options:
+      topic: homeassistant/watchtower/jonsbo-n3-cwwk-n355/status
+conditions: []
+actions:
+  - alias: Scheduled start - wake Zotac and start the first backup
+    choose:
+      - conditions:
+          - condition: trigger
+            id: cheapest_start
+        sequence:
+          - alias: Wake and wait only when JonsBo is not ready
+            if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: binary_sensor.10_0_0_131
+                    state:
+                      - 'on'
+            then:
+              - alias: Wake Jonsbo
+                action: switch.turn_on
+                data: {}
+                target:
+                  entity_id: switch.jonsbo_n3_cwwk_n355_10gbe_nas_2
+              - alias: Check readiness every ten seconds for up to ten minutes
+                repeat:
+                  count: 60
+                  sequence:
+                    - alias: Wait ten seconds only while Zotac is not ready
+                      if:
+                        - condition: not
+                          conditions:
+                            - condition: state
+                              entity_id: binary_sensor.10_0_0_131
+                              state:
+                                - 'on'
+                      then:
+                        - delay:
+                            hours: 0
+                            minutes: 0
+                            seconds: 15
+                            milliseconds: 0
+          - alias: Start the first backup if ready; otherwise report a timeout
+            if:
+              - condition: state
+                entity_id: binary_sensor.10_0_0_131
+                state:
+                  - 'on'
+            then:
+              - alias: Start AsusN14E to Jonsbo N3 backup
+                action: mqtt.publish
+                data:
+                  topic: homeassistant/mqtt-listener/jonsbo-n3-cwwk-n355
+                  payload: start_asusn14e_weekly
+                  qos: 0
+                  retain: false
+            else:
+              - alias: Notify that JonsBo did not become ready
+                action: notify.pushover
+                continue_on_error: true
+                data:
+                  title: ❌ Zotac backup could not start
+                  message: >
+                    Zotac did not become ready within approximately ten minutes.
+                    No backup command was sent.
+                  data:
+                    priority: 1
+                    sound: siren
+          - alias: Finish this scheduled invocation; MQTT replies trigger later runs
+            stop: Scheduled startup handling finished
+  - condition: trigger
+    id:
+      - snapbeforewatchtower_status
+      - jonsbo_asusn14e_status
+      - jonsbo_rpi5_status
+      - cleanupinsyncoidsnapshots_status
+      - watchtower_status
+  - alias: Read the MQTT report
+    variables:
+      report: |
+        {{ trigger.payload_json
+           if trigger.payload_json is defined and trigger.payload_json is mapping
+           else {} }}
+  - variables:
+      mqtt_status: |
+        {{ report.status | default('unknown') | string | trim | lower }}
+      report_title: >
+        {{ report.title | default(report.name | default(report.job |
+        default('Syncerate'))) }}
+  - alias: Ignore dry-run notifications
+    condition: template
+    value_template: "{{ not (report.dry_run | default(false) | bool(false)) }}"
+  - alias: Only accept a completed Watchtower result from JonsBo
+    condition: template
+    value_template: >-
+      {{ trigger.id != 'watchtower_status' or
+         (report.host | default('') == 'JonsBo-N3-CWWK-N355' and
+          report.job | default('') == 'watchtower' and
+          report.phase | default('') == 'completed') }}
+  - alias: Handle success or failure
+    choose:
+      - conditions:
+          - condition: template
+            value_template: '{{ mqtt_status == ''success'' and (trigger.id != ''watchtower_status'' or (report.success | default(false) == true and report.exit_code | default(-1) == 0)) }}'
+        sequence:
+          - action: notify.pushover
+            continue_on_error: true
+            data:
+              title: "✅ {{ report_title }} ran successfully"
+              message: >-
+                {{ report_title }} finished successfully.
+
+                Exit code: {{ report.exit_code | default('unknown') }} {% if
+                report.warning | default(false) | bool(false) %} Warning:
+                The job completed with one or more non-fatal warnings. {%
+                endif %}
+              data:
+                priority: 0
+                sound: pushover
+          - alias: Continue according to which backup finished
+            choose:
+              - alias: '1 - AsusN14E to Josnbo backup successful: start Cleanup'
+                conditions:
+                  - condition: trigger
+                    id:
+                      - jonsbo_asusn14e_status
+                sequence:
+                  - alias: Start  RPI5 BackUp
+                    action: mqtt.publish
+                    data:
+                      topic: homeassistant/mqtt-listener/jonsbo-n3-cwwk-n355
+                      payload: start_rpi5_weekly
+                      qos: 0
+                      retain: false
+              - alias: '1 - RPI5 to Josnbo backup successful: start Cleanup'
+                conditions:
+                  - condition: trigger
+                    id:
+                      - jonsbo_rpi5_status
+                sequence:
+                  - alias: Start SnapBeforeWatchTower Cleanup
+                    action: mqtt.publish
+                    data:
+                      topic: homeassistant/mqtt-listener/jonsbo-n3-cwwk-n355
+                      payload: start_snapbeforewatchtower_cleanup
+                      qos: 0
+                      retain: false
+              - alias: '2 - JonsBo backup successful: start cleanup'
+                conditions:
+                  - condition: trigger
+                    id:
+                      - snapbeforewatchtower_status
+                sequence:
+                  - alias: Start CleanUpInSyncoidSnapshots
+                    action: mqtt.publish
+                    data:
+                      topic: homeassistant/mqtt-listener/jonsbo-n3-cwwk-n355
+                      payload: start_cleanupinsyncoidsnapshots_cleanup
+                      qos: 0
+                      retain: false
+              - alias: '3 - Cleanup successful: start Watchtower'
+                conditions:
+                  - condition: trigger
+                    id:
+                      - cleanupinsyncoidsnapshots_status
+                sequence:
+                  - action: mqtt.publish
+                    metadata: {}
+                    data:
+                      evaluate_payload: false
+                      qos: '0'
+                      retain: false
+                      topic: homeassistant/mqtt-listener/jonsbo-n3-cwwk-n355
+                      payload: start_watchtower
+              - alias: '4 - Watchtower successful: shutdown JonsBo N3'
+                conditions:
+                  - condition: trigger
+                    id: watchtower_status
+                sequence:
+                  - action: mqtt.publish
+                    data:
+                      topic: homeassistant/mqtt-listener/jonsbo-n3-cwwk-n355
+                      payload: shutdown_delay
+                      qos: 0
+                      retain: false
+      - conditions:
+          - condition: template
+            value_template: '{{ mqtt_status == ''failure'' }}'
+        sequence:
+          - action: notify.pushover
+            data:
+              title: "❌ {{ report_title }} failed"
+              message: >-
+                {{ report_title }} failed.
+
+                Exit code: {{ report.exit_code | default('unknown') }}
+
+                Error: {{ report.error | default('No error message') }}
+
+                Last stderr/output: {{ report.stderr | default('No stderr
+                captured') }}
+              data:
+                priority: 1
+                sound: siren
+    default:
+      - action: notify.pushover
+        data:
+          title: ❔ Job status unknown
+          message: |-
+            Received an MQTT status that was neither success nor failure.
+            Title: {{ report_title }}
+            Topic: {{ trigger.topic }}
+            Raw payload: {{ trigger.payload | default('No payload') }}
+          data:
+            priority: 0
+            sound: pushover
+mode: queued
+max: 10

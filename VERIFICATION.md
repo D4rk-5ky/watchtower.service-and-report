@@ -1,94 +1,44 @@
-# Verification — 0.0.15
+# Verification — 0.0.17
 
-Verification was performed on the release source tree without contacting a real MQTT broker, SMTP server, Docker daemon, Home Assistant instance, or issuing a real host power command.
+## Input inspection and fault reproduction
 
-## Completed checks
+The complete supplied 0.0.16 project was inspected before modification: runtime Python, all three test modules, both identical systemd unit copies, all three INI examples, Compose example, four Home Assistant YAML files, README, code map, version history, verification file, manifest and version file. The supplied archive itself was not modified.
 
-- `python3 -m unittest discover -s tests -v`
-  - Result: **47 tests passed**.
-  - Docker, MQTT, mail, and power operations are mocked where external I/O would otherwise occur.
-  - New optional-channel regressions cover MQTT-only, mail-only, both channels disabled, both optional sections omitted, missing Paho while MQTT is disabled, disabled-feature settings being ignored, and Watchtower success/failure behavior when no external output channel is enabled.
-  - Current-run regressions verify `--since` log scoping, captured Compose exit-code use, and fail-closed behavior when the timestamp marker is unavailable.
-  - New production-format regressions verify Watchtower 1.7.1 default Auto/LogFmt `Session done` output is parsed successfully and that LogFmt summaries with failed updates still fail strictly.
-  - Existing regressions still cover report JSON validation, MQTT/mail/power failure gates, sendmail and SMTP backends, systemd command wiring, completed-Watchtower inspection, shared-topic Home Assistant host filtering, `mode: restart`, and shutdown-only-after-success behavior.
-- `python3 -m py_compile mqtt_power_action_none.py tests/test_mqtt_reports.py tests/test_watchtower_flow.py`
-  - Result: **passed**.
-- YAML parsing with PyYAML for the shipped `HomeAssistant/watchtower-manual-update.yaml` and `compose.example.yaml`.
-  - Result: **passed**.
-- INI parsing with `configparser` for both complete example configs.
-  - Result: **passed**; each example contains **43 active options**.
-  - Both contain explicit `mqtt.enabled = true` and `mail.enabled = true` examples with comments explaining how to disable or omit each optional feature.
-- Paho-independent CLI checks were run with `python3 -S`, which excludes site packages:
-  - `python3 -S mqtt_power_action_none.py --help` displayed all four flag/forms without requiring `paho-mqtt`.
-  - A temporary minimal config containing only `[power]` with `action = none` ran successfully with no `[mqtt]` or `[mail]` section. Output confirmed MQTT was disabled and no power action was performed.
-- Static/unit tests verify the systemd-owned phases remain exactly:
-  - `ExecStartPre`: `docker compose ... pull watchtower`
-  - `ExecStartPre`: also resets/creates per-run marker state, then performs the only Watchtower pull
-  - `ExecStart`: `docker compose ... up --pull never --abort-on-container-exit --exit-code-from watchtower watchtower`, capturing that command's exit code
-  - `ExecStartPost`: Python reporter uses the current-run timestamp and exit-code marker, so historical logs cannot satisfy success
-  - `RemainAfterExit=no`: the completed oneshot does not stay `active (exited)`
-  - `ExecStop`: `docker compose ... down` during stop/teardown
-- `systemd-analyze verify ./systemd/watchtower.service` was attempted.
-  - The checker reached the unit but this build container has no `docker.service` and no `/usr/bin/docker` executable.
-  - It therefore reported those missing environment dependencies; no separate unit syntax error was reported.
-- Privacy/redaction scan across the project tree found no private IPv4 addresses, known prior personal host/device/account labels, or non-placeholder email addresses. Remaining addresses use reserved/example values such as `sender@example.com` and `receiver@example.com`.
-- The release file inventory is compared against 0.0.13 during manifest generation. All 14 files from 0.0.13 remain present at the same paths; modified files are explicitly recorded in the manifest and no unrelated file is removed.
-- Final staging is checked for `__pycache__`, `.pyc`, `.pyo`, build cache, and temporary files before ZIP creation.
+The reported MQTT/config failure was reproduced with Python's strict `ConfigParser`: the shown `[mqtt]` section defines `publish_dry_run` twice, once as `true` and again as `false`. Strict parsing raises `DuplicateOptionError` before any MQTT, mail, power or Docker reporting logic runs. The prior script collapsed this useful parser exception into the generic `CONFIG ERROR: Could not parse/read config file (expected INI format)` message.
 
-## Optional-channel behavior verified
+The shown service also passes `WorkingDirectory=/Storage/WatchTower//docker-compose.yaml` as the value of `--watchtower-compose`. `WorkingDirectory=` is a systemd unit directive, not part of a file path. This is independent of the duplicate INI error, but would break Watchtower inspection after the config issue is corrected.
 
-- `[mqtt] enabled = false` makes MQTT a successful no-op. Broker/topic/QoS/custom-message settings are not validated, a Paho client is never created, and `paho-mqtt` is not required.
-- Omitting the entire `[mqtt]` section also disables MQTT. For backward compatibility, an existing `[mqtt]` section without the new `enabled` option remains enabled.
-- `[mail] enabled = false` makes mail a successful no-op. Mail backend, recipient, sendmail, and SMTP settings are not used and cannot fail the run.
-- Omitting the entire `[mail]` section also disables mail. For backward compatibility, an existing `[mail]` section without the new `enabled` option remains enabled.
-- Mail-only mode still includes the automatic result JSON but does not consume an unused MQTT custom message/template.
-- In Watchtower report mode, disabled notification channels are neutral: verified Watchtower success returns success even if both MQTT and mail are disabled; failed/unverifiable Watchtower completion still returns failure to systemd.
+## Code and safety checks
 
-## What was not fully tested
+- Version incremented exactly once: `0.0.16` → `0.0.17`; `VERSION` and `mqtt_power_action_none.py --version` agree.
+- Strict duplicate detection remains enabled. Conflicting duplicates are not silently accepted or resolved by "last value wins" behavior.
+- INI files are explicitly read as UTF-8.
+- Duplicate option/section, missing-section-header and malformed-syntax errors now include useful option/section/line information without echoing the offending configuration value. Regression tests include a secret-looking value and verify it is not printed.
+- `--watchtower-compose WorkingDirectory=...` is rejected before Docker inspection. Normal YAML paths remain unchanged.
+- Existing MQTT, mail, dry-run, power, current-run marker, Watchtower result-verification and Home Assistant safety gates were not loosened.
+- Both packaged systemd unit copies remain byte-identical.
 
-- No real Watchtower container was run in this build environment. The new parser is tested against the production LogFmt shape supplied from Watchtower 1.7.1, but the target host should still run the service once after installation.
-- No real current-run `docker compose logs --since ...` or runtime-marker flow was exercised against the target Docker daemon; command construction and fail-closed behavior are covered offline.
-- No real MQTT broker, sendmail/Postfix installation, or SMTP provider was contacted.
-- No Home Assistant automation was imported/executed in a live Home Assistant instance. YAML and relevant Jinja/control-flow branches are checked offline.
-- No real shutdown/reboot was performed.
-- Native `systemd-analyze verify` cannot complete successfully in this build container because Docker/systemd Docker dependencies are absent. Run it again on the target host after editing paths.
+## Automated checks
 
-## Recommended target-host checks
+- **64/64 unit tests passed** with Python 3.13.5; zero failures/errors/skips.
+- `mqtt_power_action_none.py` and all three test modules compiled successfully with bytecode redirected outside the release tree.
+- `--version` returned `0.0.17`; `--help` rendered every public flag successfully.
+- A minimal reproduction containing two `publish_dry_run` options exited 2 with a line-specific duplicate-option message.
+- A direct CLI invocation using `--watchtower-compose WorkingDirectory=/Storage/WatchTower/docker-compose.yaml` exited 2 before Docker access with the specific path/directive diagnostic.
+- All three shipped INI examples parse in strict mode, contain the same **48 options across 7 sections**, and every option is documented in README.md.
+- AST inventory confirmed every runtime function and every documented test/helper method is represented in `commented_code_map.md`.
+- All four Home Assistant YAML files and `compose.example.yaml` parsed successfully with PyYAML.
+- `systemd-analyze verify` was attempted. The check could not complete in this container because it has no `docker.service` and no `/usr/bin/docker`; it reported those environment dependencies and no separate unit-syntax diagnostic.
 
-For the normal MQTT-enabled Watchtower workflow:
+## Packaging verification
 
-```sh
-sudo systemd-analyze verify /etc/systemd/system/watchtower.service
-sudo systemctl daemon-reload
-sudo systemctl start watchtower.service
-sudo systemctl status watchtower.service
-sudo journalctl -u watchtower.service -n 100 --no-pager
-```
+The release manifest is generated by comparing every file in the final 0.0.17 tree with the supplied 0.0.16 tree. No supplied file path is removed. Changed and unchanged files receive current and previous SHA-256/size metadata; the manifest's own current hash is intentionally null to avoid self-reference.
 
-To test optional modes safely, first keep `power.action = none`, then try one configuration at a time:
+The final ZIP is reopened and checked for: one clean top-level `watchtower.service-and-report-0.0.17/` directory; exact path equality with the release tree; byte-for-byte equality between archived files and the release tree; preservation of every supplied 0.0.16 file path; CRC integrity; and absence of `__pycache__`, `.pyc`, `.pyo`, build/cache/dependency/temp artifacts.
 
-```ini
-[mqtt]
-enabled = true
+## Not fully tested
 
-[mail]
-enabled = false
-```
-
-```ini
-[mqtt]
-enabled = false
-
-[mail]
-enabled = true
-```
-
-```ini
-[mqtt]
-enabled = false
-
-[mail]
-enabled = false
-```
-
-When MQTT is enabled, temporarily subscribe in Home Assistant to the chosen shared result topic and confirm the JSON contains at least `status` and `host`. When MQTT is disabled, no MQTT result is expected; use the systemd exit/status and, if enabled, email reporting instead.
+- No real Docker daemon, Watchtower container/image pull, systemd service run, broker, SMTP server, sendmail queue, Home Assistant instance or local shutdown/reboot command was contacted.
+- Native `systemd-analyze verify` dependency resolution cannot pass in this container because Docker/systemd Docker unit files are absent; run it again on the target Linux host after editing installation paths.
+- The BTRFS Docker subvolume error shown in the journal was intentionally not investigated or changed, per request.
+- The user's live `/etc/systemd/system/watchtower.service` and live config file cannot be edited from this package; the corrected lines must be deployed on the target host.
