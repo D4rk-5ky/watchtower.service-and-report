@@ -1,45 +1,44 @@
-# Verification — 0.0.16
+# Verification — 0.0.17
 
-## Input inspection and release baseline
+## Input inspection and fault reproduction
 
-Inspected the complete Watchtower archive: runtime script, all tests, both service files, Compose/config/HA examples, README, code map, verification, manifest and release history. Compared the reporting implementation, config selection, app call sites, notification tests and HA JSON example in the supplied Syncerate archive. Treated the attached automation and old release notes as reference material, not instructions overriding the current request.
+The complete supplied 0.0.16 project was inspected before modification: runtime Python, all three test modules, both identical systemd unit copies, all three INI examples, Compose example, four Home Assistant YAML files, README, code map, version history, verification file, manifest and version file. The supplied archive itself was not modified.
 
-The input archive is internally inconsistent: VERSION, manifest and release history identify 0.0.15; the Python file declares 1.1.0, rejects action=none and does not implement its service's Watchtower arguments. Its old manifest describes a different Python file and omits files actually present. The initial supplied suite ran 47 tests with 8 failures, 48 errors (including subtest errors), and 3 skipped YAML/template tests in the original Python environment. These are baseline results, not the result for this release.
+The reported MQTT/config failure was reproduced with Python's strict `ConfigParser`: the shown `[mqtt]` section defines `publish_dry_run` twice, once as `true` and again as `false`. Strict parsing raises `DuplicateOptionError` before any MQTT, mail, power or Docker reporting logic runs. The prior script collapsed this useful parser exception into the generic `CONFIG ERROR: Could not parse/read config file (expected INI format)` message.
 
-The package's established release sequence is authoritative: 0.0.15 → 0.0.16. The executable and VERSION now agree. No intermediate version was created. All 18 original file paths remain. The original input ZIPs were never modified.
+The shown service also passes `WorkingDirectory=/Storage/WatchTower//docker-compose.yaml` as the value of `--watchtower-compose`. `WorkingDirectory=` is a systemd unit directive, not part of a file path. This is independent of the duplicate INI error, but would break Watchtower inspection after the config issue is corrected.
 
-## Completed checks
+## Code and safety checks
 
-- **63 tests passed, zero failures/errors/skips**, using Python 3.12.14, PyYAML 6.0.3 and Jinja2 3.1.6.
-- All four Python sources compiled successfully with bytecode directed outside the release tree.
-- All five shipped YAML files parsed; JonsBo and generic manual success/failure guards evaluated with Jinja2 and controlled inputs.
-- All three full INI examples contain the same 48 options. Every option is documented in README; all literal configuration reads and all runtime function names are accounted for in the examples/code map.
-- Dependency-free CLI checks with `python -S`: help, version, missing/invalid arguments, missing config, local-only action=none, and both original generic safe-preview configurations.
-- Full CLI current-run success and failure with a local fake Docker executable: marker parsing, --since wiring, report identity, status and process exit code. No Docker daemon was used.
-- Real publisher child-process execution with a local fake Paho module: request reaches the worker, retain is false, payload is valid JSON, and an intentionally stalled publisher is killed by the configured hard deadline.
-- Worker exception/nonzero-output paths suppress captured secret text; publish timeout cannot hang indefinitely.
-- Runtime version and package VERSION both report 0.0.16. Root and systemd service files match byte-for-byte.
+- Version incremented exactly once: `0.0.16` → `0.0.17`; `VERSION` and `mqtt_power_action_none.py --version` agree.
+- Strict duplicate detection remains enabled. Conflicting duplicates are not silently accepted or resolved by "last value wins" behavior.
+- INI files are explicitly read as UTF-8.
+- Duplicate option/section, missing-section-header and malformed-syntax errors now include useful option/section/line information without echoing the offending configuration value. Regression tests include a secret-looking value and verify it is not printed.
+- `--watchtower-compose WorkingDirectory=...` is rejected before Docker inspection. Normal YAML paths remain unchanged.
+- Existing MQTT, mail, dry-run, power, current-run marker, Watchtower result-verification and Home Assistant safety gates were not loosened.
+- Both packaged systemd unit copies remain byte-identical.
 
-Tests cover both JSON and LogFmt Watchtower sessions, success with no updates, failed updates, warning success, invalid/missing/duplicate summaries, negative/boolean/string/inconsistent counters, explicit error/failed-container logs, bounded/redacted diagnostics, malformed logs, running/duplicate service state, bad/missing runtime markers, optional/omitted transport sections, safe local power suppression and notification failure gates.
+## Automated checks
 
-Both ordinary and Watchtower previews are tested across all four MQTT/mail opt-in combinations. Default previews do not send either notification; selected channels send real test messages, master switches still disable them, and local power is never executed. Preview failures select failure mail, and preview email is clearly labeled.
-
-JonsBo tests verify CleanUpIn success emits start_watchtower, matching completed Watchtower success emits shutdown_delay, and failure/unknown/preview/mismatched-host/mismatched-job/uncompleted/inconsistent success reports cannot authorize shutdown. Publisher/consumer topic agreement and the original Monday schedule are checked.
+- **64/64 unit tests passed** with Python 3.13.5; zero failures/errors/skips.
+- `mqtt_power_action_none.py` and all three test modules compiled successfully with bytecode redirected outside the release tree.
+- `--version` returned `0.0.17`; `--help` rendered every public flag successfully.
+- A minimal reproduction containing two `publish_dry_run` options exited 2 with a line-specific duplicate-option message.
+- A direct CLI invocation using `--watchtower-compose WorkingDirectory=/Storage/WatchTower/docker-compose.yaml` exited 2 before Docker access with the specific path/directive diagnostic.
+- All three shipped INI examples parse in strict mode, contain the same **48 options across 7 sections**, and every option is documented in README.md.
+- AST inventory confirmed every runtime function and every documented test/helper method is represented in `commented_code_map.md`.
+- All four Home Assistant YAML files and `compose.example.yaml` parsed successfully with PyYAML.
+- `systemd-analyze verify` was attempted. The check could not complete in this container because it has no `docker.service` and no `/usr/bin/docker`; it reported those environment dependencies and no separate unit-syntax diagnostic.
 
 ## Packaging verification
 
-MANIFEST.json is regenerated from the actual supplied ZIP, not its stale manifest. Every original file is listed as unchanged/updated with original and current hashes/sizes; all added files are identified, with no removed paths. The manifest's own hash is null to avoid self-reference.
+The release manifest is generated by comparing every file in the final 0.0.17 tree with the supplied 0.0.16 tree. No supplied file path is removed. Changed and unchanged files receive current and previous SHA-256/size metadata; the manifest's own current hash is intentionally null to avoid self-reference.
 
-The final ZIP is reopened and checked for exact path equality with the release tree, all 18 original paths, byte-for-byte agreement, every recorded SHA-256/size, CRC integrity, one clean top-level directory, and no __pycache__, .pyc, .pyo, build/cache/dependency/temp files. An external SHA-256 checksum covers the entire archive, including its manifest.
-
-Original .gitignore, original HomeAssistant/home-assistant-automation.yaml, original HomeAssistant/syncerate-all-servers.yaml, compose.example.yaml and systemd/watchtower.service remain byte-identical. Other original paths are updated intentionally and listed in the manifest. All three new files are included: the JonsBo config, JonsBo automation and compatibility test module.
+The final ZIP is reopened and checked for: one clean top-level `watchtower.service-and-report-0.0.17/` directory; exact path equality with the release tree; byte-for-byte equality between archived files and the release tree; preservation of every supplied 0.0.16 file path; CRC integrity; and absence of `__pycache__`, `.pyc`, `.pyo`, build/cache/dependency/temp artifacts.
 
 ## Not fully tested
 
-- This macOS environment has no Docker executable/daemon or systemd-analyze. Native Linux service execution, container updates, actual image pulls, log formats beyond fixtures, and teardown behavior remain host tests. A startup/post-start failure may skip ExecStop; this release does not claim universal cleanup.
-- No real broker/authentication/QoS delivery, SMTP/STARTTLS/SSL server, sendmail queue, power command, or Home Assistant instance was contacted or controlled. The real Paho library was not installed for these tests; its worker call boundary was exercised with a fake module.
-- YAML parsing/Jinja branch evaluation is not full Home Assistant schema/runtime validation. Check the new automation in your installed HA release and verify the existing listener's start_watchtower/shutdown_delay commands before using the live chain.
-- No run-ID correlation, replay suppression, duplicate-event deduplication, or missing-result timer was added to the daily event-driven chain. Preview guards, host/job identity, current-run log markers and non-retained publishing protect the intended path, but a replayed valid completion event remains an event. Use only the intended result publisher/topic.
-- dry_run controls the reporter only. Starting the systemd unit still runs real Watchtower updates; use direct reporter invocations for notification previews.
-
-The Syncerate reference project was read, not changed or repackaged.
+- No real Docker daemon, Watchtower container/image pull, systemd service run, broker, SMTP server, sendmail queue, Home Assistant instance or local shutdown/reboot command was contacted.
+- Native `systemd-analyze verify` dependency resolution cannot pass in this container because Docker/systemd Docker unit files are absent; run it again on the target Linux host after editing installation paths.
+- The BTRFS Docker subvolume error shown in the journal was intentionally not investigated or changed, per request.
+- The user's live `/etc/systemd/system/watchtower.service` and live config file cannot be edited from this package; the corrected lines must be deployed on the target host.

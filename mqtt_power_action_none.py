@@ -24,7 +24,7 @@ import json
 import re
 import shlex
 
-__version__ = "0.0.16"
+__version__ = "0.0.17"
 
 
 # Print a config-related error and exit with code 2.
@@ -299,16 +299,43 @@ def get_mqtt_client_id(config) -> str:
     return render_template(configured_client_id, config)
 
 
+def describe_config_parse_error(error, path: str) -> str:
+    """Return a useful INI error without echoing config values or secrets."""
+    line = getattr(error, "lineno", None)
+    location = f" at line {line}" if line else ""
+
+    if isinstance(error, configparser.DuplicateOptionError):
+        return (f"Duplicate option '{error.option}' in section [{error.section}]{location} of {path}. "
+                "Each option may appear only once.")
+    if isinstance(error, configparser.DuplicateSectionError):
+        return (f"Duplicate section [{error.section}]{location} of {path}. "
+                "Each section may appear only once.")
+    if isinstance(error, configparser.MissingSectionHeaderError):
+        return f"Expected an INI section header such as [server] before{location} of {path}."
+    if isinstance(error, configparser.ParsingError):
+        line_numbers = [str(item[0]) for item in getattr(error, "errors", []) if item]
+        suffix = f" at line(s) {', '.join(line_numbers)}" if line_numbers else location
+        return f"Could not parse INI syntax{suffix} of {path}."
+    return f"Could not parse config file as INI: {path}."
+
+
 # Load and validate the config file before any MQTT, mail, or power action happens.
 # This catches invalid options early instead of failing halfway through execution.
 def load_config(path: str):
-    config = configparser.ConfigParser(interpolation=None)
+    # Keep ConfigParser's strict duplicate detection. Conflicting duplicate values
+    # must fail closed instead of silently choosing one of them.
+    config = configparser.ConfigParser(interpolation=None, strict=True)
 
-    # config.read() returns a list of files successfully loaded.
+    # config.read() returns a list of files successfully loaded. UTF-8 keeps
+    # configured host names/comments deterministic across system locales.
     try:
-        files_read = config.read(path)
-    except (configparser.Error, OSError, UnicodeError):
-        config_error("Could not parse/read config file (expected INI format)")
+        files_read = config.read(path, encoding="utf-8")
+    except configparser.Error as error:
+        config_error(describe_config_parse_error(error, path))
+    except UnicodeError:
+        config_error(f"Could not decode config file as UTF-8: {path}")
+    except OSError:
+        config_error(f"Could not read config file: {path}")
 
     # If no file was read, the path is probably wrong or unreadable.
     if not files_read:
@@ -785,6 +812,9 @@ def parse_compose_exit_code(output, service):
 
 def report_watchtower(config, compose_file, service="watchtower", since_file=None, exit_code_file=None):
     """Inspect only the finished run, then attempt one non-retained result report."""
+    if str(compose_file).startswith("WorkingDirectory="):
+        config_error("--watchtower-compose expects only the Compose YAML path; "
+                     "WorkingDirectory= is a separate systemd unit directive")
     if get_str(config, "power", "action", required=True) != "none":
         config_error("Watchtower reporting requires [power] action = none")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", service):
@@ -860,18 +890,18 @@ def parse_args():
         "-c",
         "--config",
         required=True,
-        help="Path to config file.",
+        help="Path to UTF-8 INI config; duplicate sections/options are rejected.",
     )
 
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--watchtower-compose", metavar="FILE",
-                        help="Inspect an already-finished Watchtower Compose job; never starts containers.")
+                        help="Inspect an already-finished Watchtower Compose job from this YAML path; never starts containers.")
     parser.add_argument("--watchtower-service", default="watchtower", metavar="NAME",
-                        help="Compose service to inspect (default: watchtower).")
+                        help="Compose service name to inspect (default: watchtower; requires --watchtower-compose when changed).")
     parser.add_argument("--watchtower-since-file", metavar="FILE",
-                        help="Read this invocation's ISO-8601 start timestamp; pair with --watchtower-exit-code-file.")
+                        help="Read this invocation's timezone-aware ISO-8601 start timestamp; must pair with --watchtower-exit-code-file.")
     parser.add_argument("--watchtower-exit-code-file", metavar="FILE",
-                        help="Read this invocation's Compose exit code; pair with --watchtower-since-file.")
+                        help="Read this invocation's Compose exit code (0-255); must pair with --watchtower-since-file.")
     args = parser.parse_args()
     if bool(args.watchtower_since_file) != bool(args.watchtower_exit_code_file):
         parser.error("Both Watchtower runtime marker flags must be supplied together")

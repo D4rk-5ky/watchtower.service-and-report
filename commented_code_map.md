@@ -1,4 +1,4 @@
-# Commented code and command map — 0.0.16
+# Commented code and command map — 0.0.17
 
 Current implementation: one runtime Python file, reusing shared config, JSON, MQTT, mail and power helpers. The supplied Syncerate project is a contract reference, not a runtime dependency.
 
@@ -7,6 +7,7 @@ Current implementation: one runtime Python file, reusing shared config, JSON, MQ
 | Function | What it does and why |
 | --- | --- |
 | `config_error` | Print a controlled configuration failure and exit 2 before external actions. |
+| `describe_config_parse_error` | Turn ConfigParser syntax/duplicate failures into precise section/option/line diagnostics without echoing config values or secrets. |
 | `get_str` | Read and strip a string with required/default handling so all settings share validation rules. |
 | `get_int` | Reuse get_str and validate integer configuration values. |
 | `get_float` | Reuse get_str and validate decimal delays/timeouts. |
@@ -21,7 +22,7 @@ Current implementation: one runtime Python file, reusing shared config, JSON, MQ
 | `build_mqtt_report` | Use Syncerate's typed status fields without claiming power completion. |
 | `build_mqtt_message` | Reuse one serializer for ordinary, custom, mail, and verified Watchtower reports. |
 | `get_mqtt_client_id` | Generate a hostname-based ID or expand a custom template for the broker connection. |
-| `load_config` | Read INI without interpolation; validate power/report settings and enabled transports before side effects. |
+| `load_config` | Read strict UTF-8 INI without interpolation; reject duplicate sections/options with secret-safe diagnostics, then validate power/report settings and enabled transports before side effects. |
 | `publish_mqtt` | Honor master/preview switches; reuse report serialization and pass credentials through stdin to a bounded child. DNS/connect/publish stalls cannot block indefinitely. |
 | `publish_worker` | Read the private JSON request and call Paho single with retain=False; keep optional Paho dependency and network work inside the child. |
 | `find_sendmail` | Choose explicit sendmail path, common system paths or PATH without shell interpolation. |
@@ -35,7 +36,7 @@ Current implementation: one runtime Python file, reusing shared config, JSON, MQ
 | `inspect_watchtower_output` | Fail closed unless exactly one complete session and zero failures are verified. |
 | `_read_runtime_text` | Read a small runtime marker without executing its contents. |
 | `parse_compose_exit_code` | Handle Compose object/array/JSON-lines output; require one stopped service. |
-| `report_watchtower` | Inspect only the finished run, then attempt one non-retained result report. |
+| `report_watchtower` | Reject a mistaken `WorkingDirectory=` prefix, inspect only the finished run, then attempt one non-retained result report. |
 | `parse_args` | Document config, version, Compose service and paired run-marker flags; reject invalid mode combinations early. |
 | `try_send_mail` | Mail failures must not prevent an MQTT failure report. |
 | `report_failure` | Build a forced JSON failure, attempt MQTT and optional failure email, and preserve the original error exit code. |
@@ -72,8 +73,8 @@ The entry-point guard handles the private worker switch in its own process and e
 | --- | --- |
 | `python3 … --help / -h` | Show every public flag without loading configuration. |
 | `python3 … --version / cat VERSION` | Read executable/package version without external actions. |
-| `python3 … -c PATH / --config PATH` | Choose the full INI for ordinary reporting/readiness and optional power. |
-| `--watchtower-compose FILE` | Inspect the finished job using this Compose file; forbids local power actions. |
+| `python3 … -c PATH / --config PATH` | Choose the strict UTF-8 INI for ordinary reporting/readiness and optional power; duplicate sections/options are rejected. |
+| `--watchtower-compose FILE` | Inspect the finished job using this Compose YAML path only; `WorkingDirectory=` is a separate unit directive and is rejected here. |
 | `--watchtower-service NAME` | Select the Compose service, default watchtower. |
 | `--watchtower-since-file FILE` | Read a timezone-aware start timestamp; requires the exit-code marker. |
 | `--watchtower-exit-code-file FILE` | Read this invocation's Compose exit code; requires the timestamp marker. |
@@ -83,7 +84,7 @@ The entry-point guard handles the private worker switch in its own process and e
 | `Requires=docker.service; After=docker.service network-online.target; Wants=network-online.target` | Require Docker and order startup after network readiness. |
 | `Type=oneshot; RemainAfterExit=no` | Wait for update/report and allow a subsequent fresh start after normal completion. |
 | `RuntimeDirectory=mqtt-power-action; RuntimeDirectoryMode=0755` | Create the per-run marker directory under /run. |
-| `WorkingDirectory=/opt/watchtower` | Choose the dedicated Compose project directory. |
+| `WorkingDirectory=/opt/watchtower` | Choose the dedicated Compose project directory; never concatenate this directive into the `--watchtower-compose` argument. |
 | `ExecStartPre: rm -f marker files` | Discard stale runtime markers before each invocation. |
 | `ExecStartPre: date --iso-8601=seconds > start marker` | Record invocation time before Docker work, enabling --since log filtering. |
 | `ExecStartPre: docker compose … pull watchtower` | Pull once. Leading - lets the existing local image be tried if pull fails. |
@@ -126,6 +127,7 @@ Every method below runs offline. Transport/power methods use mocks except the ex
 | `ReportTests.test_invalid_custom_payloads` | Plain text, arrays, missing/unknown status, bad types and nonfinite JSON fail. |
 | `ReportTests.test_invalid_auto_settings` | Invalid automatic status/code/warning are config errors. |
 | `ReportTests.test_invalid_report_stops_before_io` | Even continuation flags cannot publish or execute power with invalid JSON. |
+| `ReportTests.test_config_parse_errors_identify_duplicates_without_echoing_secrets` | Reproduce duplicate option/section and malformed INI failures; require line-specific errors while ensuring secret values are never echoed. |
 | `ReportTests.test_published_payload_and_shared_topic` | Either outcome uses the configured topic and bounded worker transport. |
 | `ReportTests.test_optional_mqtt_disabled_needs_no_paho_or_mqtt_settings` | Disabled MQTT is a dependency-free no-op and ignores unused MQTT settings. |
 | `ReportTests.test_optional_mail_disabled_ignores_unused_mail_settings` | Disabled mail ignores backend/recipient/SMTP settings and never sends. |

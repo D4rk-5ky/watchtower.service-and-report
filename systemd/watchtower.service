@@ -27,6 +27,7 @@ ExecStart=/bin/sh -c '/usr/bin/docker compose -f docker-compose.yaml up --pull n
 
 # Read only logs newer than this invocation marker and use the captured current-run
 # Compose exit code. Historical Watchtower logs can therefore never satisfy success.
+# The --watchtower-compose value is ONLY the YAML path; never prefix it with WorkingDirectory=.
 ExecStartPost=/usr/bin/python3 /opt/mqtt-power-action/mqtt_power_action_none.py -c /opt/mqtt-power-action/configs/config-sendmail-none.example.ini --watchtower-compose /opt/watchtower/docker-compose.yaml --watchtower-service watchtower --watchtower-since-file /run/mqtt-power-action/watchtower-started-at --watchtower-exit-code-file /run/mqtt-power-action/watchtower-exit-code
 
 # Tear down this dedicated Compose project after reporting and on an explicit stop.

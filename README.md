@@ -39,7 +39,9 @@ The original `HomeAssistant/home-assistant-automation.yaml` and `syncerate-all-s
 
 Copy the project to `/opt/mqtt-power-action`. Put the dedicated Compose example at `/opt/watchtower/docker-compose.yaml`, then edit its settings. The optional Watchtower-native email settings require their environment password; remove that optional email block if unused. Watchtower-native email is separate from the Python reporter's email.
 
-Choose and edit one INI file. In `systemd/watchtower.service`, set the actual `WorkingDirectory`, Compose path, Python path, and config path. For JonsBo, replace `config-sendmail-none.example.ini` in `ExecStartPost` with `config-jonsbo-watchtower.example.ini`. The root `watchtower.service` contains the same unit for compatibility; use the copy under `systemd/` as the installation source.
+Choose and edit one INI file. INI parsing is strict and UTF-8: every section and every option may appear only once. A duplicate such as two `publish_dry_run` entries is rejected instead of silently choosing one value; the error names the duplicate and line without echoing the configured value.
+
+In `systemd/watchtower.service`, set the actual `WorkingDirectory`, Compose path, Python path, and config path. `WorkingDirectory=` is a systemd directive on its own line; it is **not** part of the value passed to `--watchtower-compose`. The argument must be only the YAML path, for example `--watchtower-compose /Storage/WatchTower/docker-compose.yaml`, not `--watchtower-compose WorkingDirectory=/Storage/WatchTower/docker-compose.yaml`. For JonsBo, replace `config-sendmail-none.example.ini` in `ExecStartPost` with `config-jonsbo-watchtower.example.ini`. The root `watchtower.service` contains the same unit for compatibility; use the copy under `systemd/` as the installation source.
 
 ```sh
 sudo install -m 644 systemd/watchtower.service /etc/systemd/system/watchtower.service
@@ -73,8 +75,8 @@ python3 mqtt_power_action_none.py --config /path/config.ini \
 | --- | --- |
 | `-h`, `--help` | List public flags and exit without loading a config. |
 | `--version` | Print the application version and exit. `cat VERSION` reads the same packaged version. |
-| `-c PATH`, `--config PATH` | Required INI path for an actual run; no default file is assumed. |
-| `--watchtower-compose FILE` | Inspect an already-completed job from this Compose file. Never starts/pulls containers. Requires `power.action=none`; enabled MQTT requires automatic, non-retained JSON. |
+| `-c PATH`, `--config PATH` | Required UTF-8 INI path for an actual run; no default file is assumed. Duplicate sections/options are rejected with a line-specific error. |
+| `--watchtower-compose FILE` | Inspect an already-completed job from this Compose file. Pass the YAML path only; do not prefix it with `WorkingDirectory=`. Never starts/pulls containers. Requires `power.action=none`; enabled MQTT requires automatic, non-retained JSON. |
 | `--watchtower-service NAME` | Compose service name to inspect; default `watchtower`. Requires Watchtower mode when overridden. |
 | `--watchtower-since-file FILE` | File containing this invocation's timezone-aware ISO-8601 start timestamp. Must accompany the exit-code marker. Invalid/missing markers fail closed without reading historical logs. |
 | `--watchtower-exit-code-file FILE` | File containing this invocation's integer Compose exit code (0–255). Must accompany the start marker. |
@@ -114,7 +116,7 @@ on_failure = true
 
 ## Configuration reference
 
-All three INI examples contain the same 48 options. MQTT and mail are disabled if their whole section is omitted. An existing section without `enabled` remains enabled for compatibility. Settings for a disabled transport are ignored. Paho is loaded only inside the publishing worker.
+All three INI examples contain the same 48 options. The files are read as UTF-8 with strict duplicate detection: each section and option may occur only once. MQTT and mail are disabled if their whole section is omitted. An existing section without `enabled` remains enabled for compatibility. Settings for a disabled transport are ignored. Paho is loaded only inside the publishing worker.
 
 Templates support `{hostname}`, `{safe_hostname}`, `{action}`, and `{event}`. `safe_hostname` is normalized for IDs; `event` is `success` for `none`, `server_shutdown` for shutdown, or `server_reboot` for reboot. Use double literal braces in custom JSON templates. Prefer `message=auto` for safe escaping.
 

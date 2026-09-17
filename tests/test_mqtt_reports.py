@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import shlex
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import Mock, call, patch
@@ -149,6 +150,30 @@ class ReportTests(unittest.TestCase):
             publish.assert_not_called()
             mail.assert_not_called()
             power.assert_not_called()
+
+    def test_config_parse_errors_identify_duplicates_without_echoing_secrets(self):
+        """Malformed INI explains the line/option while never printing config values."""
+        cases = [
+            ("[mqtt]\npublish_dry_run = true\npublish_dry_run = false\n",
+             "Duplicate option 'publish_dry_run' in section [mqtt] at line 3"),
+            ("[mqtt]\na = 1\n[mqtt]\nb = 2\n",
+             "Duplicate section [mqtt] at line 3"),
+            ("password = TOPSECRET\n[mqtt]\na = 1\n",
+             "Expected an INI section header such as [server] before at line 1"),
+            ("[mqtt]\npassword = TOPSECRET\nthis line is invalid\n",
+             "Could not parse INI syntax at line(s) 3"),
+        ]
+        for text, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'config.ini'
+                path.write_text(text, encoding='utf-8')
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as error:
+                    self.app.load_config(str(path))
+                self.assertEqual(error.exception.code, 2)
+                message = output.getvalue()
+                self.assertIn(expected, message)
+                self.assertNotIn('TOPSECRET', message)
 
     def test_published_payload_and_shared_topic(self):
         """Either outcome uses the configured topic and bounded worker transport."""

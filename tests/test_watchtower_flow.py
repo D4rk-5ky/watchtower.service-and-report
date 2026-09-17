@@ -211,6 +211,13 @@ class WatchtowerReportTests(unittest.TestCase):
             publish.assert_not_called()
             self.cfg.set(section, option, old)
 
+        with patch.object(self.app.subprocess, 'run') as docker, \
+             contextlib.redirect_stdout(io.StringIO()), \
+             self.assertRaises(SystemExit) as err:
+            self.app.report_watchtower(self.cfg, 'WorkingDirectory=/Storage/WatchTower/docker-compose.yaml')
+        self.assertEqual(err.exception.code, 2)
+        docker.assert_not_called()
+
         with patch.object(sys, 'argv', ['app', '-c', 'config.ini',
                                         '--watchtower-compose', '/compose',
                                         '--watchtower-service', 'updater']):
