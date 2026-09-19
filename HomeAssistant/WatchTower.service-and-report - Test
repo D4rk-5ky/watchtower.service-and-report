@@ -1,0 +1,286 @@
+alias: WatchTower.service-and-report - Test
+description: >
+  Start the backup chain at the scheduled time and process MQTT reports.
+  Success, failure, and unknown results are reported individually. A reported
+  failure or unknown status does not stop the chain.
+triggers:
+  - trigger: time
+    at: sensor.backup_start_time
+    id: cheapest_start
+    weekday:
+      - mon
+    enabled: false
+  - trigger: mqtt
+    id: mqtt_power_action_status
+    options:
+      topic: homeassistant/backup/power-action/status
+conditions: []
+actions:
+  - alias: Scheduled start - wake backup server and start the first backup
+    choose:
+      - conditions:
+          - condition: trigger
+            id: cheapest_start
+        sequence:
+          - alias: Wake and wait only when backup server is not ready
+            if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: binary_sensor.backup_server_online
+                    state: 'on'
+            then:
+              - alias: Wake backup server
+                action: switch.turn_on
+                continue_on_error: true
+                data: {}
+                target:
+                  entity_id: switch.backup_server_power
+              - alias: Check readiness every 15 seconds for up to ten minutes
+                repeat:
+                  count: 40
+                  sequence:
+                    - alias: Wait 15 seconds only while backup server is not ready
+                      if:
+                        - condition: not
+                          conditions:
+                            - condition: state
+                              entity_id: binary_sensor.backup_server_online
+                              state: 'on'
+                      then:
+                        - delay:
+                            hours: 0
+                            minutes: 0
+                            seconds: 15
+                            milliseconds: 0
+          - alias: Start the first backup if ready; otherwise report a timeout
+            if:
+              - condition: state
+                entity_id: binary_sensor.backup_server_online
+                state: 'on'
+            then:
+              - alias: Start Source A to backup server backup
+                action: mqtt.publish
+                continue_on_error: true
+                data:
+                  topic: homeassistant/mqtt-listener/backup-server
+                  payload: start_source_a_backup
+                  qos: 0
+                  retain: false
+            else:
+              - alias: Notify that backup server did not become ready
+                action: notify.pushover
+                continue_on_error: true
+                data:
+                  title: ❌ Backup chain could not start
+                  message: >
+                    The backup server did not become ready within approximately ten minutes.
+                    No backup command was sent.
+                  data:
+                    priority: 1
+                    sound: siren
+          - alias: Finish this scheduled invocation; MQTT replies trigger later runs
+            stop: Scheduled startup handling finished
+  - condition: trigger
+    id:
+      - cleanup_step_1_status
+      - source_a_backup_status
+      - source_b_backup_status
+      - cleanup_step_2_status
+      - mqtt_power_action_status
+  - alias: Read the MQTT report
+    variables:
+      report: |
+        {{ trigger.payload_json
+           if trigger.payload_json is defined and trigger.payload_json is mapping
+           else {} }}
+  - alias: Prepare MQTT report values
+    variables:
+      mqtt_status: |
+        {{ report.status | default('unknown') | string | trim | lower }}
+      report_title: >
+        {{ report.title | default(report.name | default(report.job |
+        default('Backup job'))) }}
+  - alias: Ignore preview reports so tests cannot advance the backup chain
+    condition: template
+    value_template: '{{ not (report.dry_run | default(false) | bool(false)) }}'
+    enabled: false
+  - alias: Handle power readiness without treating it as a completed backup
+    if:
+      - condition: trigger
+        id: mqtt_power_action_status
+    then:
+      - alias: Report power action result
+        choose:
+          - conditions:
+              - condition: template
+                value_template: '{{ mqtt_status == ''success'' }}'
+            sequence:
+              - action: notify.pushover
+                continue_on_error: true
+                data:
+                  title: ⏻ {{ report_title }}
+                  message: >-
+                    {{ report.message | default('The server is preparing its
+                    power action.') }}
+
+                    Host: {{ report.host | default('unknown') }} Action: {{
+                    report.action | default(report.command | default('unknown'))
+                    }} {% if report.warning | default(false) | bool(false) %}
+                    Warning: the script continued with a non-fatal notification
+                    error. {% endif %}
+                  data:
+                    priority: 0
+                    sound: pushover
+          - conditions:
+              - condition: template
+                value_template: '{{ mqtt_status == ''failure'' }}'
+            sequence:
+              - action: notify.pushover
+                continue_on_error: true
+                data:
+                  title: ❌ {{ report_title }} failed
+                  message: >-
+                    {{ report_title }} failed.
+
+                    Exit code: {{ report.exit_code | default('unknown') }}
+
+                    Error: {{ report.error | default('No error message') }}
+
+                    Last stderr/output: {{ report.stderr | default('No stderr
+                    captured') }}
+                  data:
+                    priority: 1
+                    sound: siren
+        default:
+          - action: notify.pushover
+            continue_on_error: true
+            data:
+              title: ❔ {{ report_title }} status unknown
+              message: |-
+                Received an MQTT status that was neither success nor failure.
+                Title: {{ report_title }}
+                Topic: {{ trigger.topic }}
+                Raw payload: {{ trigger.payload | default('No payload') }}
+              data:
+                priority: 0
+                sound: pushover
+      - stop: Power readiness notification handled
+  - alias: Report success, failure, or unknown
+    choose:
+      - conditions:
+          - condition: template
+            value_template: '{{ mqtt_status == ''success'' }}'
+        sequence:
+          - action: notify.pushover
+            continue_on_error: true
+            data:
+              title: ✅ Backup job ran successfully
+              message: >-
+                {{ report_title }} finished successfully.
+
+                Exit code: {{ report.exit_code | default('unknown') }} {% if
+                report.warning | default(false) | bool(false) %} Warning:
+                The backup job completed with one or more non-fatal warnings. {%
+                endif %}
+              data:
+                priority: 0
+                sound: pushover
+      - conditions:
+          - condition: template
+            value_template: '{{ mqtt_status == ''failure'' }}'
+        sequence:
+          - action: notify.pushover
+            continue_on_error: true
+            data:
+              title: ❌ {{ report_title }} failed
+              message: >-
+                {{ report_title }} failed.
+
+                Exit code: {{ report.exit_code | default('unknown') }}
+
+                Error: {{ report.error | default('No error message') }}
+
+                Last stderr/output: {{ report.stderr | default('No stderr
+                captured') }}
+
+                The automation will continue with the next step.
+              data:
+                priority: 1
+                sound: siren
+    default:
+      - action: notify.pushover
+        continue_on_error: true
+        data:
+          title: ❔ Backup job status unknown
+          message: |-
+            Received an MQTT status that was neither success nor failure.
+            Title: {{ report_title }}
+            Topic: {{ trigger.topic }}
+            Raw payload: {{ trigger.payload | default('No payload') }}
+
+            The automation will continue with the next step.
+          data:
+            priority: 0
+            sound: pushover
+  - alias: Continue according to which job reported, regardless of result
+    choose:
+      - alias: '1 - Source A backup finished: start Source B backup'
+        conditions:
+          - condition: trigger
+            id:
+              - source_a_backup_status
+        sequence:
+          - alias: Start Source B backup
+            action: mqtt.publish
+            continue_on_error: true
+            data:
+              topic: homeassistant/mqtt-listener/backup-server
+              payload: start_source_b_backup
+              qos: 0
+              retain: false
+      - alias: '2 - Source B backup finished: start cleanup step 1'
+        conditions:
+          - condition: trigger
+            id:
+              - source_b_backup_status
+        sequence:
+          - alias: Start cleanup step 1
+            action: mqtt.publish
+            continue_on_error: true
+            data:
+              topic: homeassistant/mqtt-listener/backup-server
+              payload: start_cleanup_step_1
+              qos: 0
+              retain: false
+      - alias: '3 - Cleanup step 1 finished: start cleanup step 2'
+        conditions:
+          - condition: trigger
+            id:
+              - cleanup_step_1_status
+        sequence:
+          - alias: Start cleanup step 2
+            action: mqtt.publish
+            continue_on_error: true
+            data:
+              topic: homeassistant/mqtt-listener/backup-server
+              payload: start_cleanup_step_2
+              qos: 0
+              retain: false
+      - alias: '4 - Cleanup step 2 finished: shut down backup server'
+        conditions:
+          - condition: trigger
+            id:
+              - cleanup_step_2_status
+        sequence:
+          - alias: Shut down backup server
+            action: mqtt.publish
+            continue_on_error: true
+            data:
+              evaluate_payload: false
+              qos: 0
+              retain: false
+              topic: homeassistant/mqtt-listener/backup-server
+              payload: shutdown_delay
+mode: queued
+max: 10
